@@ -1,0 +1,401 @@
+"""
+Tests for the backend (physical design) LangGraph execution graph.
+
+Tests:
+- Graph construction (compiles, has expected nodes)
+- BackendState schema (includes Backend Lead + artifact fields)
+- Routing functions (route_after_pnr, route_after_drc, route_after_lvs,
+  route_after_timing, route_decision, route_after_human,
+  route_after_increment, route_after_advance_lead)
+- Internal nodes (init_design, backend_complete)
+- Happy path (no integration top -> flat synth fails -> diagnose -> skip)
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from langgraph.checkpoint.memory import MemorySaver
+
+from orchestrator.langgraph.backend_graph import (
+    BackendState,
+    build_backend_graph,
+    route_after_pnr,
+    route_after_drc,
+    route_after_lvs,
+    route_after_timing,
+    route_after_precheck,
+    route_decision,
+    route_after_human,
+    route_after_increment,
+    route_after_advance_lead,
+    init_design_node,
+    advance_block_node,
+    backend_complete_node,
+)
+
+from orchestrator.tests.fft16_fixtures import FFT16_BLOCK_DIAGRAM
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_backend_block(name: str, tier: int = 1) -> dict:
+    return {
+        "name": name,
+        "tier": tier,
+        "rtl_path": f"rtl/dvbt/{name}.v",
+        "netlist_path": f"synth/{name}_netlist.v",
+        "sdc_path": f"synth/{name}.sdc",
+        "description": f"Backend test block {name}",
+    }
+
+
+def _fft16_backend_blocks():
+    return [
+        _make_backend_block("fft_butterfly", tier=1),
+        _make_backend_block("twiddle_rom", tier=1),
+        _make_backend_block("fft_controller", tier=2),
+    ]
+
+
+def _initial_backend_state(blocks=None) -> dict:
+    if blocks is None:
+        blocks = [_make_backend_block("fft_butterfly")]
+    return {
+        "project_root": "/tmp/test",
+        "target_clock_mhz": 50.0,
+        "max_attempts": 3,
+        "block_queue": blocks,
+        # Backend Lead fields
+        "frontend_blocks": blocks,
+        "architecture_connections": [],
+        "design_name": "test_chip_top",
+        "block_rtl_paths": {},
+        "glue_blocks": [],
+        "integration_top_path": "",
+        "flat_netlist_path": "",
+        "flat_sdc_path": "",
+        "synth_gate_count": 0,
+        "synth_area_um2": 0.0,
+        # Legacy compat
+        "current_block_index": 0,
+        "current_block": {},
+        "attempt": 1,
+        "phase": "init",
+        "constraints": [],
+        "attempt_history": [],
+        "previous_error": "",
+        "floorplan_result": None,
+        "place_result": None,
+        "cts_result": None,
+        "route_result": None,
+        "drc_result": None,
+        "lvs_result": None,
+        "timing_result": None,
+        "power_result": None,
+        "debug_result": None,
+        "completed_blocks": [],
+        "human_response": None,
+        "backend_done": False,
+        "routed_def_path": "",
+        "pnr_verilog_path": "",
+        "pwr_verilog_path": "",
+        "spef_path": "",
+        "gds_path": "",
+        "spice_path": "",
+        "step_log_paths": {},
+        "final_report_path": "",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Graph Construction
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestGraphConstruction:
+    def test_compiles_without_error(self):
+        graph = build_backend_graph(checkpointer=MemorySaver())
+        assert graph is not None
+
+    def test_compiles_without_checkpointer(self):
+        graph = build_backend_graph(checkpointer=None)
+        assert graph is not None
+
+    def test_has_expected_nodes(self):
+        graph = build_backend_graph(checkpointer=MemorySaver())
+        node_names = list(graph.get_graph().nodes.keys())
+        expected = [
+            "init_design", "flat_top_synthesis", "run_pnr",
+            "drc", "lvs", "timing_signoff",
+            "diagnose", "decide", "ask_human",
+            "increment_attempt", "advance_block", "backend_complete",
+            "final_report",
+        ]
+        for name in expected:
+            assert name in node_names, f"Missing node: {name}"
+
+    def test_no_old_stub_nodes(self):
+        """Ensure the old separate floorplan/place/cts/route/power nodes are gone."""
+        graph = build_backend_graph(checkpointer=MemorySaver())
+        node_names = list(graph.get_graph().nodes.keys())
+        removed = ["floorplan", "place", "cts", "route", "power_analysis", "init_block"]
+        for name in removed:
+            assert name not in node_names, f"Old stub node still present: {name}"
+
+    def test_node_count(self):
+        graph = build_backend_graph(checkpointer=MemorySaver())
+        # 14 real nodes + __start__ + __end__ = 16
+        node_names = list(graph.get_graph().nodes.keys())
+        assert len(node_names) == 16
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# State Schema
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestBackendState:
+    def test_has_required_fields(self):
+        annotations = BackendState.__annotations__
+        required = [
+            "project_root", "target_clock_mhz", "max_attempts", "block_queue",
+            "current_block_index", "current_block", "attempt", "phase",
+            "constraints", "attempt_history", "previous_error",
+            "floorplan_result", "place_result", "cts_result",
+            "route_result", "drc_result", "lvs_result",
+            "timing_result", "power_result", "debug_result",
+            "completed_blocks", "human_response", "backend_done",
+            "frontend_blocks", "architecture_connections", "design_name",
+        ]
+        for f in required:
+            assert f in annotations, f"Missing field: {f}"
+
+    def test_has_artifact_path_fields(self):
+        """New artifact path fields added for real EDA tool integration."""
+        annotations = BackendState.__annotations__
+        artifact_fields = [
+            "routed_def_path", "pnr_verilog_path", "pwr_verilog_path",
+            "spef_path", "gds_path", "spice_path", "step_log_paths",
+            "flat_netlist_path", "flat_sdc_path", "integration_top_path",
+        ]
+        for f in artifact_fields:
+            assert f in annotations, f"Missing artifact field: {f}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Routing Functions
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestRouteAfterPnR:
+    def test_success_goes_to_drc(self):
+        assert route_after_pnr({"route_result": {"success": True}}) == "drc"
+
+    def test_fail_goes_to_diagnose(self):
+        assert route_after_pnr({"route_result": {"success": False}}) == "diagnose"
+
+    def test_missing_result_goes_to_diagnose(self):
+        assert route_after_pnr({}) == "diagnose"
+
+
+class TestRouteAfterDRC:
+    def test_clean_goes_to_lvs(self):
+        assert route_after_drc({"drc_result": {"clean": True}}) == "lvs"
+
+    def test_fail_goes_to_diagnose(self):
+        assert route_after_drc({"drc_result": {"clean": False}}) == "diagnose"
+
+    def test_missing_result_goes_to_diagnose(self):
+        assert route_after_drc({}) == "diagnose"
+
+
+class TestRouteAfterLVS:
+    def test_match_goes_to_timing(self):
+        assert route_after_lvs({"lvs_result": {"match": True}}) == "timing_signoff"
+
+    def test_fail_goes_to_diagnose(self):
+        assert route_after_lvs({"lvs_result": {"match": False}}) == "diagnose"
+
+    def test_missing_result_goes_to_diagnose(self):
+        assert route_after_lvs({}) == "diagnose"
+
+
+class TestRouteAfterTiming:
+    def test_met_goes_to_advance(self):
+        assert route_after_timing({"timing_result": {"met": True}}) == "advance_block"
+
+    def test_violated_goes_to_diagnose(self):
+        assert route_after_timing({"timing_result": {"met": False}}) == "diagnose"
+
+    def test_missing_result_goes_to_diagnose(self):
+        assert route_after_timing({}) == "diagnose"
+
+
+class TestRouteAfterPrecheck:
+    def test_pass_goes_to_advance(self):
+        assert route_after_precheck({"precheck_result": {"pass": True}}) == "advance_block"
+
+    def test_fail_goes_to_diagnose(self):
+        assert route_after_precheck({"precheck_result": {"pass": False}}) == "diagnose"
+
+    def test_llm_cannot_override_failed_precheck(self):
+        state = {"precheck_result": {"pass": False, "llm_analysis": {"submission_ready": True}}}
+        assert route_after_precheck(state) == "diagnose"
+
+
+class TestRouteDecision:
+    def test_retry_pnr(self):
+        assert route_decision({"debug_result": {"next_action": "retry_pnr"}}) == "increment_attempt"
+
+    def test_ask_human(self):
+        assert route_decision({"debug_result": {"next_action": "ask_human"}}) == "ask_human"
+
+    def test_escalate(self):
+        assert route_decision({"debug_result": {"next_action": "escalate"}}) == "advance_block"
+
+    def test_default_is_increment(self):
+        assert route_decision({"debug_result": {"next_action": "??"}}) == "increment_attempt"
+
+    def test_missing_action(self):
+        assert route_decision({"debug_result": {}}) == "increment_attempt"
+
+
+class TestRouteAfterHuman:
+    def test_retry(self):
+        assert route_after_human({"human_response": {"action": "retry"}}) == "increment_attempt"
+
+    def test_skip(self):
+        assert route_after_human({"human_response": {"action": "skip"}}) == "advance_block"
+
+    def test_abort(self):
+        assert route_after_human({"human_response": {"action": "abort"}}) == "backend_complete"
+
+    def test_default(self):
+        assert route_after_human({"human_response": {"action": "??"}}) == "increment_attempt"
+
+    def test_missing_response(self):
+        assert route_after_human({}) == "increment_attempt"
+
+
+class TestRouteAfterIncrement:
+    def test_within_limit(self):
+        assert route_after_increment({"attempt": 2, "max_attempts": 3}) == "run_pnr"
+
+    def test_at_limit(self):
+        assert route_after_increment({"attempt": 3, "max_attempts": 3}) == "run_pnr"
+
+    def test_exhausted(self):
+        assert route_after_increment({"attempt": 4, "max_attempts": 3}) == "advance_block"
+
+
+class TestRouteAfterAdvanceLead:
+    def test_always_returns_backend_complete(self):
+        state = {"current_block_index": 0, "block_queue": [{}, {}, {}]}
+        assert route_after_advance_lead(state) == "backend_complete"
+
+    def test_empty_queue(self):
+        state = {"current_block_index": 0, "block_queue": []}
+        assert route_after_advance_lead(state) == "backend_complete"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Internal Nodes
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestInternalNodes:
+    @pytest.mark.asyncio
+    async def test_init_design_sets_current_block(self):
+        state = _initial_backend_state(_fft16_backend_blocks())
+        result = await init_design_node(state)
+        assert result["current_block"]["name"] == "test_chip_top"
+        assert result["attempt"] == 1
+        assert result["phase"] == "init"
+        assert result["step_log_paths"] == {}
+
+    @pytest.mark.asyncio
+    async def test_init_design_no_integration_top(self):
+        state = _initial_backend_state(_fft16_backend_blocks())
+        result = await init_design_node(state)
+        assert "No integration top-level RTL" in result.get("previous_error", "")
+
+    @pytest.mark.asyncio
+    async def test_backend_complete(self):
+        state = {"completed_blocks": [{"name": "a", "success": True}], "project_root": "/tmp/test"}
+        result = await backend_complete_node(state)
+        assert result["backend_done"] is True
+
+    @pytest.mark.asyncio
+    async def test_advance_block_precheck_hard_fail_not_overridden_by_llm(self):
+        state = {
+            "project_root": "/tmp/test",
+            "current_block": {"name": "top"},
+            "attempt": 1,
+            "drc_result": {"clean": True},
+            "lvs_result": {"match": True},
+            "timing_result": {"met": True},
+            "precheck_result": {"pass": False, "llm_analysis": {"submission_ready": True}},
+            "route_result": {"success": True},
+            "step_log_paths": {},
+            "constraints": [],
+        }
+        result = await advance_block_node(state)
+        assert result["completed_blocks"][0]["success"] is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Happy Path (full graph -- no integration top -> flat synth fails -> diagnose -> skip)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_MOCK_DASHBOARD = AsyncMock(return_value="<html><body>stub</body></html>")
+_DASHBOARD_PATCH = (
+    "orchestrator.architecture.specialists.chip_finish_dashboard"
+    ".generate_chip_finish_dashboard"
+)
+
+
+_DIAGNOSE_PATCH = (
+    "orchestrator.architecture.specialists.tapeout_diagnosis"
+    ".diagnose_tapeout_failure"
+)
+
+_MOCK_DIAGNOSE = AsyncMock(return_value={
+    "category": "PNR_FAILURE",
+    "diagnosis": "No integration top RTL for synthesis",
+    "confidence": 0.2,
+    "action": "continue",
+    "suggested_fix": "Provide integration top-level RTL",
+    "pnr_overrides": {},
+})
+
+
+class TestHappyPath:
+    @pytest.mark.asyncio
+    @patch(_DASHBOARD_PATCH, _MOCK_DASHBOARD)
+    @patch(_DIAGNOSE_PATCH, new_callable=AsyncMock, return_value={
+        "category": "PNR_FAILURE",
+        "diagnosis": "No integration top RTL for synthesis",
+        "confidence": 0.2,
+        "action": "continue",
+        "suggested_fix": "Provide integration top-level RTL",
+        "pnr_overrides": {},
+    })
+    async def test_no_integration_top_hits_interrupt_then_skips(
+        self, mock_diag, backend_graph,
+    ):
+        """Walk: no integration top -> flat synth fails -> diagnose -> ask_human -> skip."""
+        from langgraph.types import Command
+
+        config = {"configurable": {"thread_id": "test-backend-happy-1"}}
+        state = _initial_backend_state([_make_backend_block("fft_butterfly")])
+
+        await backend_graph.ainvoke(state, config)
+
+        result = await backend_graph.ainvoke(
+            Command(resume={"action": "skip"}), config
+        )
+
+        assert result["backend_done"] is True
+        assert len(result["completed_blocks"]) == 1
+        assert result["completed_blocks"][0]["name"] == "test_chip_top"
+        assert result["completed_blocks"][0]["skipped"] is True

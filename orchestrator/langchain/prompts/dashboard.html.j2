@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Architecture Dashboard — {{ design_name }}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0f1724;--sidebar:#131c2e;--card:#1a2540;--card2:#1e2d4a;--border:#2a3a5c;
+--text:#c8d6e5;--text2:#8899aa;--accent:#4a90d9;--accent2:#6c8cff;--green:#4ade80;
+--yellow:#fbbf24;--red:#ff6b6b;--cyan:#22d3ee;--heading:#fff;--code-bg:#111827;--sidebar-hover:rgba(74,144,217,.15)}
+[data-theme="light"]{--bg:#f8fafc;--sidebar:#ffffff;--card:#ffffff;--card2:#f1f5f9;--border:#cbd5e1;
+--text:#334155;--text2:#64748b;--accent:#2563eb;--accent2:#3b5998;--green:#16a34a;
+--yellow:#d97706;--red:#dc2626;--cyan:#0891b2;--heading:#0f172a;--code-bg:#f1f5f9;--sidebar-hover:rgba(37,99,235,.08)}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+background:var(--bg);color:var(--text);display:flex;min-height:100vh;font-size:14px;line-height:1.6}
+a{color:var(--accent2);text-decoration:none}
+nav{position:fixed;top:0;left:0;width:220px;height:100vh;background:var(--sidebar);
+border-right:1px solid var(--border);padding:20px 0;overflow-y:auto;z-index:10;display:flex;flex-direction:column}
+nav h2{color:var(--accent2);font-size:13px;text-transform:uppercase;letter-spacing:1.5px;
+padding:0 20px 16px;border-bottom:1px solid var(--border)}
+nav a{display:block;padding:10px 20px;color:var(--text2);font-size:13px;transition:all .2s}
+nav a:hover,nav a.active{color:var(--heading);background:var(--sidebar-hover);border-left:3px solid var(--accent2)}
+main{margin-left:220px;flex:1;padding:32px 40px;max-width:1200px}
+h1{font-size:28px;color:var(--heading);margin-bottom:4px}
+.subtitle{color:var(--text2);margin-bottom:32px;font-size:14px}
+section{margin-bottom:48px}
+section>h2{font-size:20px;color:var(--heading);margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+section h3{font-size:16px;color:var(--accent2);margin:16px 0 8px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:24px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center}
+.card .val{font-size:24px;font-weight:700;color:var(--heading)}
+.card .lbl{font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.8px;margin-top:4px}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+th{background:var(--card2);color:var(--accent2);text-align:left;padding:10px 12px;
+font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+td{padding:9px 12px;border-bottom:1px solid var(--border)}
+tr:hover td{background:rgba(74,144,217,.05)}
+code{background:var(--card2);padding:2px 6px;border-radius:4px;font-size:12px;color:var(--cyan)}
+ul,ol{padding-left:20px;margin:6px 0}
+li{margin:4px 0;font-size:13px}
+hr{border:none;border-top:1px solid var(--border);margin:16px 0}
+.note{background:var(--card);border-left:3px solid var(--accent2);padding:12px 16px;
+border-radius:0 8px 8px 0;margin:12px 0;font-size:13px;color:var(--text2)}
+.muted{color:var(--text2);font-size:13px}
+
+.doc-content{background:var(--card);border:1px solid var(--border);border-radius:8px;
+padding:20px 24px;margin:12px 0;max-height:600px;overflow-y:auto}
+.doc-content h1,.doc-content h2,.doc-content h3,.doc-content h4{color:var(--accent2);margin:14px 0 8px}
+.doc-content h1{font-size:18px;border-bottom:1px solid var(--border);padding-bottom:6px}
+.doc-content h2{font-size:16px}
+.doc-content h3{font-size:14px}
+.doc-content h4{font-size:13px}
+.doc-content p{margin:6px 0}
+.doc-content strong{color:var(--heading)}
+.doc-content table{margin:10px 0}
+.doc-content pre{background:var(--code-bg);border:1px solid var(--border);border-radius:6px;
+padding:12px;overflow-x:auto;margin:10px 0;font-family:'JetBrains Mono',monospace;font-size:12px}
+.doc-content code{font-family:'JetBrains Mono',monospace}
+
+.mermaid-wrap{background:var(--card);border:1px solid var(--border);border-radius:8px;
+padding:20px;margin:12px 0;overflow-x:auto}
+.mermaid{display:flex;justify-content:center}
+.mermaid svg{max-width:100%}
+
+.uarch-block{margin-bottom:24px;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.uarch-header{background:var(--card2);padding:10px 16px;cursor:pointer;display:flex;
+justify-content:space-between;align-items:center;user-select:none}
+.uarch-header h3{margin:0;font-size:14px;color:var(--accent2)}
+.uarch-header .chevron{transition:transform .2s;color:var(--text2)}
+.uarch-header.open .chevron{transform:rotate(180deg)}
+.uarch-body{padding:16px 20px;display:none;background:var(--card)}
+.uarch-body.open{display:block}
+
+footer{text-align:center;padding:24px;color:var(--text2);font-size:12px;border-top:1px solid var(--border);margin-top:40px}
+@media(max-width:900px){nav{display:none}main{margin-left:0;padding:20px}}
+</style>
+<script>
+(function(){
+  var t = localStorage.getItem('socmate-theme');
+  if (!t && window.matchMedia('(prefers-color-scheme: light)').matches) t = 'light';
+  if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+})();
+</script>
+</head>
+<body>
+
+<nav>
+<h2>{{ design_name_short }}</h2>
+<a href="#summary">Summary</a>
+<a href="#blocks">Block Diagram</a>
+<a href="#prd">PRD</a>
+{% if sad_html %}<a href="#sad">SAD</a>{% endif %}
+{% if frd_html %}<a href="#frd">FRD</a>{% endif %}
+<a href="#ers">ERS</a>
+<a href="#memory-map">Memory Map</a>
+<a href="#clock-tree">Clock Tree</a>
+<a href="#register-spec">Register Spec</a>
+{% if uarch_specs %}<a href="#uarch">Microarchitecture</a>{% endif %}
+<div style="margin-top:auto;padding:10px 20px;border-top:1px solid var(--border);">
+<button id="themeBtn" onclick="toggleTheme()" style="width:100%;padding:7px 10px;background:var(--card2);color:var(--text2);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:12px;transition:all .2s;">Light mode</button>
+</div>
+</nav>
+
+<main>
+
+<!-- ============ SUMMARY ============ -->
+<section id="summary">
+<h1>{{ design_name }}</h1>
+<p class="subtitle">{{ design_subtitle }}</p>
+<div class="cards">
+{% for m in metrics %}
+<div class="card"><div class="val">{{ m.value }}</div><div class="lbl">{{ m.label }}</div></div>
+{% endfor %}
+</div>
+{% if design_notes %}
+<div class="note">{{ design_notes }}</div>
+{% endif %}
+</section>
+
+<!-- ============ BLOCK DIAGRAM ============ -->
+<section id="blocks">
+<h2>Block Diagram</h2>
+
+{% if mermaid_diagram %}
+<div class="mermaid-wrap">
+<pre class="mermaid">
+{{ mermaid_diagram }}
+</pre>
+</div>
+{% endif %}
+
+<h3>Blocks</h3>
+{% if blocks %}
+<table>
+<tr><th>Block</th><th>Tier</th><th>Subsystem</th><th>Description</th><th>Est. Gates</th><th>RTL Target</th></tr>
+{% for b in blocks %}
+<tr>
+<td><code>{{ b.name }}</code></td>
+<td>{{ b.tier }}</td>
+<td>{{ b.subsystem or '—' }}</td>
+<td>{{ b.description }}</td>
+<td>{{ b.estimated_gates }}</td>
+<td><code>{{ b.rtl_target }}</code></td>
+</tr>
+{% endfor %}
+</table>
+{% else %}
+<p class="muted">No blocks defined.</p>
+{% endif %}
+
+{% if connections %}
+<h3>Connections</h3>
+<table>
+<tr><th>From</th><th>To</th><th>Interface</th><th>Width</th><th>Bus</th></tr>
+{% for c in connections %}
+<tr>
+<td><code>{{ c.from }}</code></td>
+<td><code>{{ c.to }}</code></td>
+<td>{{ c.interface }}</td>
+<td>{{ c.data_width }}-bit</td>
+<td>{{ c.bus_name or '—' }}</td>
+</tr>
+{% endfor %}
+</table>
+{% else %}
+<p class="muted">No inter-block connections.</p>
+{% endif %}
+</section>
+
+<!-- ============ PRD ============ -->
+<section id="prd">
+<h2>PRD — Product Requirements Document</h2>
+{% if prd_html %}
+<div class="doc-content">{{ prd_html }}</div>
+{% else %}
+<p class="muted">PRD not available.</p>
+{% endif %}
+</section>
+
+<!-- ============ SAD ============ -->
+{% if sad_html %}
+<section id="sad">
+<h2>SAD — System Architecture Document</h2>
+<div class="doc-content">{{ sad_html }}</div>
+</section>
+{% endif %}
+
+<!-- ============ FRD ============ -->
+{% if frd_html %}
+<section id="frd">
+<h2>FRD — Functional Requirements Document</h2>
+<div class="doc-content">{{ frd_html }}</div>
+</section>
+{% endif %}
+
+<!-- ============ ERS ============ -->
+<section id="ers">
+<h2>ERS — Engineering Requirements Specification</h2>
+{% if ers_html %}
+<div class="doc-content">{{ ers_html }}</div>
+{% else %}
+<p class="muted">ERS not available.</p>
+{% endif %}
+</section>
+
+<!-- ============ MEMORY MAP ============ -->
+<section id="memory-map">
+<h2>Memory Map</h2>
+{% if memory_map and memory_map.peripherals %}
+<table>
+<tr><th>Name</th><th>Base Address</th><th>Size</th><th>Block</th></tr>
+{% for p in memory_map.peripherals %}
+<tr>
+<td><code>{{ p.name }}</code></td>
+<td><code>{{ "0x%08X"|format(p.base_address) }}</code></td>
+<td>{{ p.size_bytes }} B</td>
+<td>{{ p.block }}</td>
+</tr>
+{% endfor %}
+</table>
+{% if memory_map.sram %}
+<h3>SRAM</h3>
+<table>
+<tr><th>Name</th><th>Base Address</th><th>Size (KB)</th></tr>
+{% for s in memory_map.sram %}
+<tr>
+<td><code>{{ s.name }}</code></td>
+<td><code>{{ "0x%08X"|format(s.base_address) }}</code></td>
+<td>{{ s.size_kb }}</td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+{% elif memory_map_html %}
+<div class="doc-content">{{ memory_map_html }}</div>
+{% else %}
+<p class="muted">No memory map — single-block or bus-less design.</p>
+{% endif %}
+</section>
+
+<!-- ============ CLOCK TREE ============ -->
+<section id="clock-tree">
+<h2>Clock Tree</h2>
+{% if clock_tree and clock_tree.domains %}
+<table>
+<tr><th>Domain</th><th>Frequency</th><th>Source</th><th>Blocks</th></tr>
+{% for d in clock_tree.domains %}
+<tr>
+<td><code>{{ d.name }}</code></td>
+<td>{{ d.frequency_mhz }} MHz</td>
+<td>{{ d.source }}</td>
+<td>{{ d.blocks|join(', ') if d.blocks else '—' }}</td>
+</tr>
+{% endfor %}
+</table>
+{% if clock_tree.crossings %}
+<h3>CDC Crossings</h3>
+<table>
+<tr><th>From</th><th>To</th><th>Strategy</th></tr>
+{% for x in clock_tree.crossings %}
+<tr>
+<td><code>{{ x.from_domain }}</code></td>
+<td><code>{{ x.to_domain }}</code></td>
+<td>{{ x.strategy }}</td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+{% if clock_tree.reset %}
+<h3>Reset</h3>
+<table>
+<tr><th>Signal</th><th>Type</th><th>Polarity</th></tr>
+{% for r in clock_tree.reset %}
+<tr>
+<td><code>{{ r.name }}</code></td>
+<td>{{ r.type }}</td>
+<td>{{ r.polarity }}</td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+{% elif clock_tree_html %}
+<div class="doc-content">{{ clock_tree_html }}</div>
+{% else %}
+<p class="muted">No clock tree defined.</p>
+{% endif %}
+</section>
+
+<!-- ============ REGISTER SPEC ============ -->
+<section id="register-spec">
+<h2>Register Specification</h2>
+{% if register_spec and register_spec.blocks %}
+{% for rb in register_spec.blocks %}
+<h3>{{ rb.name }} ({{ "0x%08X"|format(rb.base_address) }})</h3>
+<table>
+<tr><th>Offset</th><th>Name</th><th>Width</th><th>Access</th><th>Description</th></tr>
+{% for reg in rb.registers %}
+<tr>
+<td><code>{{ "0x%02X"|format(reg.offset) }}</code></td>
+<td><code>{{ reg.name }}</code></td>
+<td>{{ reg.width }}-bit</td>
+<td>{{ reg.access }}</td>
+<td>{{ reg.description }}</td>
+</tr>
+{% endfor %}
+</table>
+{% endfor %}
+{% elif register_spec_html %}
+<div class="doc-content">{{ register_spec_html }}</div>
+{% else %}
+<p class="muted">No register specification defined.</p>
+{% endif %}
+</section>
+
+<!-- ============ MICROARCHITECTURE ============ -->
+{% if uarch_specs %}
+<section id="uarch">
+<h2>Microarchitecture Specifications</h2>
+{% for spec in uarch_specs %}
+<div class="uarch-block">
+<div class="uarch-header" onclick="this.classList.toggle('open');this.nextElementSibling.classList.toggle('open')">
+<h3>{{ spec.name }}</h3>
+<span class="chevron">&#9660;</span>
+</div>
+<div class="uarch-body">{{ spec.html }}</div>
+</div>
+{% endfor %}
+</section>
+{% endif %}
+
+<footer>
+Generated by SoCMate ASIC Design Pipeline &middot; <span id="ts"></span>
+</footer>
+
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+var _isLight = document.documentElement.getAttribute('data-theme') === 'light';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: _isLight ? 'default' : 'dark',
+  themeVariables: _isLight ? {fontSize: '13px'} : {
+    primaryColor: '#1e2d4a',
+    primaryTextColor: '#c8d6e5',
+    primaryBorderColor: '#4a90d9',
+    lineColor: '#6c8cff',
+    secondaryColor: '#1a2540',
+    tertiaryColor: '#0f1724',
+    edgeLabelBackground: '#131c2e',
+    fontSize: '13px'
+  },
+  flowchart: { curve: 'basis', padding: 20 }
+});
+
+document.getElementById('ts').textContent = new Date().toISOString();
+
+function toggleTheme() {
+  var html = document.documentElement;
+  var next = html.getAttribute('data-theme') === 'light' ? '' : 'light';
+  if (next) html.setAttribute('data-theme', 'light');
+  else html.removeAttribute('data-theme');
+  localStorage.setItem('socmate-theme', next || 'dark');
+  _updateThemeBtn();
+}
+function _updateThemeBtn() {
+  var btn = document.getElementById('themeBtn');
+  if (btn) btn.textContent = document.documentElement.getAttribute('data-theme') === 'light' ? 'Dark mode' : 'Light mode';
+}
+_updateThemeBtn();
+
+const links = document.querySelectorAll('nav a');
+const sections = document.querySelectorAll('section');
+function onScroll() {
+  let cur = '';
+  sections.forEach(s => { if (s.getBoundingClientRect().top < 120) cur = s.id; });
+  links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + cur));
+}
+window.addEventListener('scroll', onScroll, { passive: true });
+onScroll();
+</script>
+</body>
+</html>

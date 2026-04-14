@@ -1,0 +1,663 @@
+"""
+Tests for the architecture stage tooling.
+
+Covers: PDKConfig, ArchitectureState, constraint checker, stub specialists,
+benchmark cache, benchmark runner (template rendering), and Temporal handoff.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from pathlib import Path
+
+import pytest
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+
+
+@pytest.fixture
+def tmp_project(tmp_path):
+    """Create a temporary project directory with .socmate/ state dir."""
+    socmate_dir = tmp_path / ".socmate"
+    socmate_dir.mkdir()
+    return str(tmp_path)
+
+
+@pytest.fixture
+def sample_block_diagram():
+    """A realistic block diagram for testing."""
+    return {
+        "blocks": [
+            {
+                "name": "scrambler",
+                "description": "PRBS energy dispersal",
+                "tier": 1,
+                "python_source": "PyDVB/dvb/Scrambler.py",
+                "rtl_target": "rtl/dvbt/scrambler.v",
+                "testbench": "tb/cocotb/test_scrambler.py",
+                "interfaces": {"input": {"width": 1}, "output": {"width": 1}},
+                "estimated_gates": 500,
+            },
+            {
+                "name": "conv_encoder",
+                "description": "K=7 rate-1/2 convolutional encoder",
+                "tier": 1,
+                "python_source": "PyDVB/dvb/Convolutional.py",
+                "rtl_target": "rtl/dvbt/conv_encoder.v",
+                "testbench": "tb/cocotb/test_conv_encoder.py",
+                "interfaces": {"input": {"width": 1}, "output": {"width": 2}},
+                "estimated_gates": 300,
+            },
+            {
+                "name": "fft_engine",
+                "description": "2048/8192-point FFT/IFFT",
+                "tier": 3,
+                "python_source": "PyDVB/dvb/OFDM.py",
+                "rtl_target": "rtl/dvbt/fft_engine.v",
+                "testbench": "tb/cocotb/test_fft_engine.py",
+                "interfaces": {"input": {"width": 4}, "output": {"width": 4}},
+                "estimated_gates": 500000,
+            },
+        ],
+        "connections": [
+            {"from": "scrambler", "to": "conv_encoder", "interface": "axis", "data_width": 1},
+            {"from": "conv_encoder", "to": "fft_engine", "interface": "axis", "data_width": 2},
+        ],
+    }
+
+
+@pytest.fixture
+def sky130_yaml_path():
+    """Path to the sky130 PDK config YAML."""
+    return str(Path(_PROJECT_ROOT) / "orchestrator" / "pdk" / "configs" / "sky130.yaml")
+
+
+# ---------------------------------------------------------------------------
+# PDKConfig tests
+# ---------------------------------------------------------------------------
+
+
+class TestPDKConfig:
+    def test_from_yaml(self, sky130_yaml_path):
+        from orchestrator.pdk import PDKConfig
+
+        pdk = PDKConfig.from_yaml(sky130_yaml_path, pdk_root="/tmp/fake_pdk")
+
+        assert pdk.name == "sky130"
+        assert pdk.process_nm == 130
+        assert pdk.supply_voltage == 1.8
+        assert pdk.std_cell_library == "sky130_fd_sc_hd"
+        assert pdk.site_name == "unithd"
+        assert pdk.default_corner == "tt_025C_1v80"
+        assert "tt_025C_1v80" in pdk.corners
+
+    def test_liberty_path_resolution(self, sky130_yaml_path):
+        from orchestrator.pdk import PDKConfig
+
+        pdk = PDKConfig.from_yaml(sky130_yaml_path, pdk_root="/opt/pdk")
+        lib_path = pdk.liberty_path()
+
+        assert lib_path.startswith("/opt/pdk/")
+        assert "sky130_fd_sc_hd__tt_025C_1v80.lib" in lib_path
+
+    def test_liberty_path_invalid_corner(self, sky130_yaml_path):
+        from orchestrator.pdk import PDKConfig
+
+        pdk = PDKConfig.from_yaml(sky130_yaml_path, pdk_root="/tmp")
+
+        with pytest.raises(KeyError, match="nonexistent"):
+            pdk.liberty_path("nonexistent")
+
+    def test_to_summary(self, sky130_yaml_path):
+        from orchestrator.pdk import PDKConfig
+
+        pdk = PDKConfig.from_yaml(sky130_yaml_path, pdk_root="/tmp")
+        summary = pdk.to_summary()
+
+        assert "sky130" in summary
+        assert "130nm" in summary
+        assert "1.8V" in summary
+
+    def test_serialization_roundtrip(self, sky130_yaml_path):
+        from orchestrator.pdk import PDKConfig
+
+        pdk = PDKConfig.from_yaml(sky130_yaml_path, pdk_root="/tmp/pdk")
+        d = pdk.to_dict()
+        pdk2 = PDKConfig.from_dict(d)
+
+        assert pdk2.name == pdk.name
+        assert pdk2.process_nm == pdk.process_nm
+        assert pdk2.supply_voltage == pdk.supply_voltage
+        assert pdk2.default_corner == pdk.default_corner
+        assert len(pdk2.corners) == len(pdk.corners)
+
+
+# ---------------------------------------------------------------------------
+# ArchitectureState tests
+# ---------------------------------------------------------------------------
+
+
+class TestArchitectureState:
+    def test_create_default(self):
+        from orchestrator.architecture.state import ArchitectureState
+
+        state = ArchitectureState()
+        assert state.requirements == ""
+        assert state.block_diagram == {}
+        assert state.block_specs == []
+
+    def test_json_roundtrip(self, tmp_project):
+        from orchestrator.architecture.state import (
+            ArchitectureState,
+            load_state,
+            save_state,
+        )
+
+        state = ArchitectureState(
+            requirements="DVB-T transceiver",
+            target_clock_mhz=50.0,
+            block_diagram={"blocks": [{"name": "scrambler"}]},
+        )
+        save_state(state, tmp_project)
+
+        loaded = load_state(tmp_project)
+        assert loaded.requirements == "DVB-T transceiver"
+        assert loaded.target_clock_mhz == 50.0
+        assert loaded.block_diagram["blocks"][0]["name"] == "scrambler"
+
+    def test_load_nonexistent_returns_default(self, tmp_project):
+        from orchestrator.architecture.state import load_state
+
+        state = load_state(tmp_project)
+        assert state.requirements == ""
+
+    def test_question_lifecycle(self):
+        from orchestrator.architecture.state import (
+            ArchitectureQuestion,
+            ArchitectureState,
+        )
+
+        state = ArchitectureState()
+
+        q = ArchitectureQuestion(
+            agent="block_diagram",
+            question="What data rate?",
+            context="Needed for FFT sizing",
+            priority="blocking",
+        )
+        assert q.id  # auto-generated
+        assert q.timestamp  # auto-generated
+        assert not q.is_answered()
+
+        state.add_question(q)
+        assert len(state.pending_questions) == 1
+        assert state.has_blocking_questions()
+
+        # Answer it
+        state.answer_question(q.id, "100 Mbps")
+        assert len(state.pending_questions) == 0
+        assert len(state.answered_questions) == 1
+        assert state.answered_questions[0]["answer"] == "100 Mbps"
+        assert not state.has_blocking_questions()
+
+
+# ---------------------------------------------------------------------------
+# Constraint checker tests
+# ---------------------------------------------------------------------------
+
+
+class TestConstraintChecker:
+    """Constraint checker now uses LLM. Tests mock ClaudeLLM to verify
+    that the checker correctly forwards violations from the LLM response."""
+
+    def _mock_llm(self, violations):
+        """Return a patch context manager that mocks ClaudeLLM to return violations."""
+        from unittest.mock import AsyncMock, patch
+
+        response = json.dumps({"violations": violations, "reasoning": "test"})
+        p = patch("orchestrator.architecture.constraints.ClaudeLLM")
+        return p, response
+
+    @pytest.mark.asyncio
+    async def test_no_violations(self, sample_block_diagram):
+        from unittest.mock import AsyncMock, patch
+        from orchestrator.architecture.constraints import check_constraints
+
+        llm_response = json.dumps({"violations": [], "reasoning": "All checks pass."})
+        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+            MockLLM.return_value.call = AsyncMock(return_value=llm_response)
+            violations = await check_constraints(
+                block_diagram=sample_block_diagram,
+                memory_map={"result": {"peripherals": [], "sram": {}}},
+                clock_tree={},
+                register_spec={},
+            )
+        assert violations == []
+
+    @pytest.mark.asyncio
+    async def test_memory_overlap(self):
+        from unittest.mock import AsyncMock, patch
+        from orchestrator.architecture.constraints import check_constraints
+
+        overlap_violations = [
+            {"violation": "Memory overlap between a and b at 0x20000000",
+             "category": "structural", "check": "memory_overlap", "severity": "error"}
+        ]
+        llm_response = json.dumps({"violations": overlap_violations})
+        mm = {
+            "result": {
+                "sram": {"base_address_int": 0, "size": 0x8000},
+                "peripherals": [
+                    {"name": "a", "base_address_int": 0x10000000, "size": 0x20000000},
+                    {"name": "b", "base_address_int": 0x20000000, "size": 0x100},
+                ],
+                "top_csr": {"base_address_int": 0x80000000, "size": 0x100},
+            }
+        }
+
+        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+            MockLLM.return_value.call = AsyncMock(return_value=llm_response)
+            violations = await check_constraints(
+                block_diagram={"blocks": [], "connections": []},
+                memory_map=mm,
+                clock_tree={},
+                register_spec={},
+            )
+        assert any("overlap" in v["violation"].lower() for v in violations)
+
+    @pytest.mark.asyncio
+    async def test_peripheral_overflow(self):
+        from unittest.mock import AsyncMock, patch
+        from orchestrator.architecture.constraints import check_constraints
+
+        overflow_violations = [
+            {"violation": "Peripheral count (10) exceeds 8-slot nibble decoder",
+             "category": "structural", "check": "peripheral_count", "severity": "error"}
+        ]
+        llm_response = json.dumps({"violations": overflow_violations})
+        blocks = [
+            {"name": f"block_{i}", "description": f"Block {i}", "tier": 1}
+            for i in range(10)
+        ]
+        diagram = {"blocks": blocks, "connections": []}
+
+        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+            MockLLM.return_value.call = AsyncMock(return_value=llm_response)
+            violations = await check_constraints(
+                block_diagram=diagram,
+                memory_map={"result": {"peripherals": [], "sram": {}}},
+                clock_tree={},
+                register_spec={},
+            )
+        assert any("peripheral count" in v["violation"].lower() for v in violations)
+
+    @pytest.mark.asyncio
+    async def test_gate_budget_exceeded(self):
+        from unittest.mock import AsyncMock, patch
+        from orchestrator.architecture.constraints import check_constraints
+
+        gate_violations = [
+            {"violation": "Total gate count (3,000,000) exceeds budget (2,000,000)",
+             "category": "auto_fixable", "check": "gate_budget", "severity": "error"}
+        ]
+        llm_response = json.dumps({"violations": gate_violations})
+        diagram = {
+            "blocks": [
+                {"name": "huge_block", "estimated_gates": 3_000_000, "tier": 3},
+            ],
+            "connections": [],
+        }
+
+        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+            MockLLM.return_value.call = AsyncMock(return_value=llm_response)
+            violations = await check_constraints(
+                block_diagram=diagram,
+                memory_map={"result": {"peripherals": [], "sram": {}}},
+                clock_tree={},
+                register_spec={},
+            )
+        assert any("gate count" in v["violation"].lower() for v in violations)
+
+    @pytest.mark.asyncio
+    async def test_disconnected_blocks(self, sample_block_diagram):
+        from unittest.mock import AsyncMock, patch
+        from orchestrator.architecture.constraints import check_constraints
+
+        orphan_violations = [
+            {"violation": "Block orphan_block has no connections",
+             "category": "structural", "check": "connectivity", "severity": "error"}
+        ]
+        llm_response = json.dumps({"violations": orphan_violations})
+        diagram = dict(sample_block_diagram)
+        diagram["blocks"] = list(diagram["blocks"]) + [
+            {"name": "orphan_block", "description": "No connections", "tier": 1}
+        ]
+
+        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+            MockLLM.return_value.call = AsyncMock(return_value=llm_response)
+            violations = await check_constraints(
+                block_diagram=diagram,
+                memory_map={"result": {"peripherals": [], "sram": {}}},
+                clock_tree={},
+                register_spec={},
+            )
+        assert any("orphan_block" in v["violation"] for v in violations)
+
+
+# ---------------------------------------------------------------------------
+# Stub specialist tests
+# ---------------------------------------------------------------------------
+
+
+class TestStubSpecialists:
+    @pytest.mark.asyncio
+    async def test_memory_map_simple_design(self, sample_block_diagram):
+        """With <= 3 blocks and no bus infra, analyze_memory_map returns a
+        simplified no-op result (simple-design escape hatch)."""
+        from orchestrator.architecture.specialists.memory_map import analyze_memory_map
+
+        result = await analyze_memory_map(sample_block_diagram)
+
+        assert result["questions"] == []
+        mm = result["result"]
+        assert mm["peripherals"] == []
+        assert mm["peripheral_count"] == 0
+        assert mm["sram"] is None
+
+    @pytest.mark.asyncio
+    async def test_clock_tree_via_llm(self, sample_block_diagram):
+        """Clock tree now uses LLM; verify structure with mocked response."""
+        from unittest.mock import AsyncMock, patch
+
+        llm_response = json.dumps({
+            "domains": [{"name": "clk_sys", "frequency_mhz": 100.0, "source": "PLL"}],
+            "crossings": [],
+            "reset_spec": {"strategy": "synchronous", "domains": ["clk_sys"]},
+            "num_domains": 1,
+            "cdc_required": False,
+        })
+
+        with patch(
+            "orchestrator.langchain.agents.cursor_llm.ClaudeLLM"
+        ) as MockLLM:
+            MockLLM.return_value.call = AsyncMock(return_value=llm_response)
+            from orchestrator.architecture.specialists.clock_tree import analyze_clock_tree
+            result = await analyze_clock_tree(sample_block_diagram, target_clock_mhz=100.0)
+
+        ct = result["result"]
+        assert len(ct["domains"]) == 1
+        assert ct["domains"][0]["frequency_mhz"] == 100.0
+        assert ct["cdc_required"] is False
+
+    @pytest.mark.asyncio
+    async def test_register_spec_via_llm(self, sample_block_diagram):
+        """Register spec now uses LLM; verify structure with mocked response."""
+        from unittest.mock import AsyncMock, patch
+
+        llm_response = json.dumps({
+            "total_blocks": 4,
+            "blocks": [
+                {"name": "scrambler", "num_config": 8, "num_status": 8,
+                 "registers": []},
+                {"name": "conv_encoder", "num_config": 8, "num_status": 8,
+                 "registers": []},
+                {"name": "fft_engine", "num_config": 8, "num_status": 8,
+                 "registers": []},
+                {"name": "top_csr", "num_config": 8, "num_status": 8,
+                 "registers": []},
+            ],
+        })
+
+        with patch(
+            "orchestrator.langchain.agents.cursor_llm.ClaudeLLM"
+        ) as MockLLM:
+            MockLLM.return_value.call = AsyncMock(return_value=llm_response)
+            from orchestrator.architecture.specialists.register_spec import (
+                analyze_register_spec,
+            )
+            result = await analyze_register_spec(sample_block_diagram)
+
+        rs = result["result"]
+        assert rs["total_blocks"] == 4
+        assert any(b["name"] == "scrambler" for b in rs["blocks"])
+        assert any(b["name"] == "top_csr" for b in rs["blocks"])
+
+        scrambler_block = next(b for b in rs["blocks"] if b["name"] == "scrambler")
+        assert scrambler_block["num_config"] == 8
+        assert scrambler_block["num_status"] == 8
+
+
+# ---------------------------------------------------------------------------
+# Benchmark cache tests
+# ---------------------------------------------------------------------------
+
+
+class TestBenchmarkCache:
+    def test_store_and_retrieve(self, tmp_project):
+        from orchestrator.architecture.benchmarks.cache import BenchmarkCache
+
+        db_path = os.path.join(tmp_project, ".socmate", "benchmark_cache.db")
+        cache = BenchmarkCache(db_path)
+
+        result = {"gate_count": 847, "area_um2": 12340}
+        cache.store("multiplier", {"width": 16}, "sky130", 50.0, result)
+
+        cached = cache.get("multiplier", {"width": 16}, "sky130", 50.0)
+        assert cached is not None
+        assert cached["gate_count"] == 847
+        assert cached["cached"] is True
+
+        cache.close()
+
+    def test_cache_miss(self, tmp_project):
+        from orchestrator.architecture.benchmarks.cache import BenchmarkCache
+
+        db_path = os.path.join(tmp_project, ".socmate", "benchmark_cache.db")
+        cache = BenchmarkCache(db_path)
+
+        cached = cache.get("multiplier", {"width": 16}, "sky130", 50.0)
+        assert cached is None
+
+        cache.close()
+
+    def test_different_params_different_keys(self, tmp_project):
+        from orchestrator.architecture.benchmarks.cache import BenchmarkCache
+
+        db_path = os.path.join(tmp_project, ".socmate", "benchmark_cache.db")
+        cache = BenchmarkCache(db_path)
+
+        cache.store("multiplier", {"width": 16}, "sky130", 50.0, {"gate_count": 847})
+        cache.store("multiplier", {"width": 32}, "sky130", 50.0, {"gate_count": 3412})
+
+        c16 = cache.get("multiplier", {"width": 16}, "sky130", 50.0)
+        c32 = cache.get("multiplier", {"width": 32}, "sky130", 50.0)
+        assert c16["gate_count"] == 847
+        assert c32["gate_count"] == 3412
+
+        cache.close()
+
+    def test_clear(self, tmp_project):
+        from orchestrator.architecture.benchmarks.cache import BenchmarkCache
+
+        db_path = os.path.join(tmp_project, ".socmate", "benchmark_cache.db")
+        cache = BenchmarkCache(db_path)
+
+        cache.store("multiplier", {"width": 16}, "sky130", 50.0, {"gate_count": 847})
+        cache.clear()
+
+        assert cache.get("multiplier", {"width": 16}, "sky130", 50.0) is None
+        cache.close()
+
+
+# ---------------------------------------------------------------------------
+# Benchmark template rendering tests
+# ---------------------------------------------------------------------------
+
+
+class TestBenchmarkTemplates:
+    def test_multiplier_template(self):
+        from orchestrator.architecture.benchmarks.runner import _render_template
+
+        verilog = _render_template("multiplier", {"width": 16})
+        assert "module benchmark_multiplier" in verilog
+        assert "[15:0]" in verilog  # width-1 = 15
+        assert "[31:0]" in verilog  # 2*width-1 = 31
+
+    def test_fifo_template(self):
+        from orchestrator.architecture.benchmarks.runner import _render_template
+
+        verilog = _render_template("fifo", {"width": 8, "depth": 64})
+        assert "module benchmark_fifo" in verilog
+        assert "[7:0]" in verilog
+
+    def test_sram_array_template(self):
+        from orchestrator.architecture.benchmarks.runner import _render_template
+
+        verilog = _render_template("sram_array", {"width": 8, "depth": 4096})
+        assert "module benchmark_sram_array" in verilog
+
+    def test_fft_butterfly_template(self):
+        from orchestrator.architecture.benchmarks.runner import _render_template
+
+        verilog = _render_template("fft_butterfly", {"width": 16, "radix": 2})
+        assert "module benchmark_fft_butterfly" in verilog
+        assert "signed" in verilog  # FFT uses signed arithmetic
+
+    def test_counter_template(self):
+        from orchestrator.architecture.benchmarks.runner import _render_template
+
+        verilog = _render_template("counter", {"width": 32})
+        assert "module benchmark_counter" in verilog
+        assert "[31:0]" in verilog
+
+
+# ---------------------------------------------------------------------------
+# Block specs JSON roundtrip test
+# ---------------------------------------------------------------------------
+
+
+class TestBlockSpecsRoundtrip:
+    def test_block_specs_json_roundtrip(self, tmp_project, sample_block_diagram):
+        """Verify that finalize -> block_specs.json roundtrip works."""
+        from orchestrator.architecture.state import ArchitectureState, save_state
+
+        state = ArchitectureState(
+            requirements="test",
+            block_diagram=sample_block_diagram,
+        )
+
+        # Simulate finalize_architecture
+        block_specs = []
+        for block in sample_block_diagram["blocks"]:
+            spec = {
+                "name": block["name"],
+                "tier": block["tier"],
+                "python_source": block["python_source"],
+                "rtl_target": block["rtl_target"],
+                "testbench": block["testbench"],
+                "description": block["description"],
+            }
+            block_specs.append(spec)
+
+        specs_path = Path(tmp_project) / ".socmate" / "block_specs.json"
+        specs_path.write_text(json.dumps(block_specs, indent=2))
+
+        # Verify JSON roundtrip
+        loaded = json.loads(specs_path.read_text())
+        assert len(loaded) == 3
+        assert loaded[0]["name"] == "scrambler"
+        assert loaded[2]["name"] == "fft_engine"
+        assert loaded[2]["tier"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Integration: end-to-end state flow
+# ---------------------------------------------------------------------------
+
+
+class TestEndToEndStateFlow:
+    @pytest.mark.asyncio
+    async def test_full_architecture_flow(self, tmp_project, sample_block_diagram):
+        """Test the complete state flow: init -> block diagram -> memory map ->
+        clock -> registers -> constraints -> finalize.
+
+        All specialists now use LLMs; mock them to keep this as a unit test.
+        """
+        from unittest.mock import AsyncMock, patch
+        from orchestrator.architecture.state import ArchitectureState, load_state, save_state
+        from orchestrator.architecture.specialists.memory_map import analyze_memory_map
+        from orchestrator.architecture.specialists.clock_tree import analyze_clock_tree
+        from orchestrator.architecture.specialists.register_spec import analyze_register_spec
+        from orchestrator.architecture.constraints import check_constraints
+
+        ct_response = json.dumps({
+            "domains": [{"name": "clk_sys", "frequency_mhz": 50.0, "source": "PLL"}],
+            "crossings": [], "num_domains": 1, "cdc_required": False,
+            "reset_spec": {"strategy": "synchronous", "domains": ["clk_sys"]},
+        })
+        rs_response = json.dumps({
+            "total_blocks": 4,
+            "blocks": [
+                {"name": "scrambler", "num_config": 8, "num_status": 8, "registers": []},
+                {"name": "conv_encoder", "num_config": 8, "num_status": 8, "registers": []},
+                {"name": "fft_engine", "num_config": 8, "num_status": 8, "registers": []},
+                {"name": "top_csr", "num_config": 8, "num_status": 8, "registers": []},
+            ],
+        })
+        cc_response = json.dumps({"violations": [], "reasoning": "All checks pass."})
+
+        state = ArchitectureState(
+            requirements="DVB-T transceiver",
+            target_clock_mhz=50.0,
+        )
+        state.block_diagram = sample_block_diagram
+        save_state(state, tmp_project)
+
+        mm = await analyze_memory_map(sample_block_diagram)
+        state.memory_map = mm
+        save_state(state, tmp_project)
+
+        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+            MockLLM.return_value.call = AsyncMock(return_value=ct_response)
+            ct = await analyze_clock_tree(sample_block_diagram, 50.0)
+        state.clock_tree = ct
+        save_state(state, tmp_project)
+
+        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+            MockLLM.return_value.call = AsyncMock(return_value=rs_response)
+            rs = await analyze_register_spec(sample_block_diagram)
+        state.register_spec = rs
+        save_state(state, tmp_project)
+
+        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+            MockLLM.return_value.call = AsyncMock(return_value=cc_response)
+            violations = await check_constraints(
+                block_diagram=sample_block_diagram,
+                memory_map=mm,
+                clock_tree=ct,
+                register_spec=rs,
+            )
+        assert violations == []
+
+        block_specs = []
+        for block in sample_block_diagram["blocks"]:
+            block_specs.append({
+                "name": block["name"],
+                "tier": block["tier"],
+                "python_source": block["python_source"],
+                "rtl_target": block["rtl_target"],
+                "testbench": block["testbench"],
+                "description": block["description"],
+            })
+        state.block_specs = block_specs
+        save_state(state, tmp_project)
+
+        final = load_state(tmp_project)
+        assert final.requirements == "DVB-T transceiver"
+        assert len(final.block_specs) == 3

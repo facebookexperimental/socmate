@@ -1,0 +1,1022 @@
+"""
+Tests for the IntegrationLeadAgent and the updated integration_check_node.
+
+Coverage:
+- IntegrationLeadAgent._build_prompt: structured prompt construction
+- IntegrationLeadAgent._parse_response: JSON extraction, fallback, validation
+- IntegrationLeadAgent._validate_result: default severity, missing fields
+- IntegrationLeadAgent.integrate: end-to-end with mocked LLM
+- integration_check_node: skip conditions, agent call, lint, interrupt flow
+- Model name updates: all agent instantiations use claude-sonnet-4-6
+- Prompt file loading: SYSTEM_PROMPT loads from disk
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from orchestrator.langchain.agents.integration_lead import (
+    IntegrationLeadAgent,
+    SYSTEM_PROMPT,
+    _PROMPT_FILE,
+)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+SAMPLE_VERILOG_A = """\
+module block_a (
+    input  wire        clk,
+    input  wire        rst_n,
+    input  wire [7:0]  data_in,
+    output wire [7:0]  data_out
+);
+    assign data_out = data_in;
+endmodule
+"""
+
+SAMPLE_VERILOG_B = """\
+module block_b (
+    input  wire        clk,
+    input  wire        rst_n,
+    input  wire [7:0]  data_in,
+    output wire [7:0]  data_out,
+    output wire        valid_out
+);
+    assign data_out = data_in;
+    assign valid_out = 1'b1;
+endmodule
+"""
+
+SAMPLE_CONNECTIONS = [
+    {
+        "from_block": "block_a",
+        "from_port": "data_out",
+        "to_block": "block_b",
+        "to_port": "data_in",
+        "interface": "data_pipe",
+        "data_width": 8,
+    },
+]
+
+SAMPLE_PORT_SUMMARIES = [
+    {
+        "name": "block_a",
+        "port_count": 4,
+        "ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "rst_n", "direction": "input", "width": 1},
+            {"name": "data_in", "direction": "input", "width": 8},
+            {"name": "data_out", "direction": "output", "width": 8},
+        ],
+    },
+    {
+        "name": "block_b",
+        "port_count": 5,
+        "ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "rst_n", "direction": "input", "width": 1},
+            {"name": "data_in", "direction": "input", "width": 8},
+            {"name": "data_out", "direction": "output", "width": 8},
+            {"name": "valid_out", "direction": "output", "width": 1},
+        ],
+    },
+]
+
+SAMPLE_AGENT_RESPONSE = json.dumps({
+    "mismatches": [],
+    "verilog": (
+        "module test_top (\n"
+        "  input  wire clk,\n"
+        "  input  wire rst_n,\n"
+        "  input  wire [7:0] block_a_data_in,\n"
+        "  output wire [7:0] block_b_data_out,\n"
+        "  output wire block_b_valid_out\n"
+        ");\n"
+        "  wire [7:0] w_block_a_data_out_to_block_b_data_in;\n"
+        "  block_a u_block_a (\n"
+        "    .clk(clk),\n"
+        "    .rst_n(rst_n),\n"
+        "    .data_in(block_a_data_in),\n"
+        "    .data_out(w_block_a_data_out_to_block_b_data_in)\n"
+        "  );\n"
+        "  block_b u_block_b (\n"
+        "    .clk(clk),\n"
+        "    .rst_n(rst_n),\n"
+        "    .data_in(w_block_a_data_out_to_block_b_data_in),\n"
+        "    .data_out(block_b_data_out),\n"
+        "    .valid_out(block_b_valid_out)\n"
+        "  );\n"
+        "endmodule\n"
+    ),
+    "module_name": "test_top",
+    "wire_count": 1,
+    "skipped_connections": [],
+    "notes": "All connections clean",
+})
+
+SAMPLE_AGENT_RESPONSE_WITH_MISMATCHES = json.dumps({
+    "mismatches": [
+        {
+            "from_block": "block_a",
+            "to_block": "block_b",
+            "issue_type": "width_mismatch",
+            "severity": "error",
+            "description": "block_a.data_out is 16-bit but block_b.data_in is 8-bit",
+            "suggested_fix": "Widen block_b.data_in to 16 bits",
+        },
+    ],
+    "verilog": "module test_top();\nendmodule\n",
+    "module_name": "test_top",
+    "wire_count": 0,
+    "skipped_connections": ["block_a->block_b (data_pipe): has errors"],
+    "notes": "Width mismatch found",
+})
+
+
+# ---------------------------------------------------------------------------
+# IntegrationLeadAgent._build_prompt
+# ---------------------------------------------------------------------------
+
+class TestBuildPrompt:
+    def test_includes_design_name(self):
+        agent = IntegrationLeadAgent()
+        prompt = agent._build_prompt(
+            "my_chip_top",
+            {"block_a": SAMPLE_VERILOG_A},
+            SAMPLE_PORT_SUMMARIES[:1],
+            SAMPLE_CONNECTIONS,
+            "Test PRD summary",
+        )
+        assert "my_chip_top" in prompt
+
+    def test_includes_block_rtl_sources(self):
+        agent = IntegrationLeadAgent()
+        prompt = agent._build_prompt(
+            "top", {"block_a": SAMPLE_VERILOG_A}, [], [], "",
+        )
+        assert "block_a" in prompt
+        assert "module block_a" in prompt
+
+    def test_includes_port_summaries(self):
+        agent = IntegrationLeadAgent()
+        prompt = agent._build_prompt(
+            "top", {}, SAMPLE_PORT_SUMMARIES, [], "",
+        )
+        assert "data_in" in prompt
+        assert "data_out" in prompt
+        assert "[8-bit]" in prompt
+
+    def test_includes_connections(self):
+        agent = IntegrationLeadAgent()
+        prompt = agent._build_prompt(
+            "top", {}, [], SAMPLE_CONNECTIONS, "",
+        )
+        assert "block_a.data_out" in prompt
+        assert "block_b.data_in" in prompt
+        assert "data_pipe" in prompt
+
+    def test_includes_prd_summary(self):
+        agent = IntegrationLeadAgent()
+        prompt = agent._build_prompt(
+            "top", {}, [], [], "50 MHz AXI-Stream pipeline",
+        )
+        assert "50 MHz AXI-Stream pipeline" in prompt
+
+    def test_omits_prd_section_when_empty(self):
+        agent = IntegrationLeadAgent()
+        prompt = agent._build_prompt("top", {}, [], [], "")
+        assert "PRD SUMMARY" not in prompt
+
+    def test_truncates_large_rtl(self):
+        large_rtl = "// " + "x" * 10000
+        agent = IntegrationLeadAgent()
+        prompt = agent._build_prompt(
+            "top", {"big_block": large_rtl}, [], [], "",
+        )
+        assert len(prompt) < len(large_rtl)
+
+    def test_handles_many_connections(self):
+        conns = [
+            {
+                "from_block": f"blk_{i}",
+                "from_port": "out",
+                "to_block": f"blk_{i+1}",
+                "to_port": "in",
+                "interface": f"conn_{i}",
+                "data_width": 8,
+            }
+            for i in range(60)
+        ]
+        agent = IntegrationLeadAgent()
+        prompt = agent._build_prompt("top", {}, [], conns, "")
+        conn_lines = [l for l in prompt.split("\n") if "blk_" in l]
+        assert len(conn_lines) <= 50
+
+
+# ---------------------------------------------------------------------------
+# IntegrationLeadAgent._parse_response
+# ---------------------------------------------------------------------------
+
+class TestParseResponse:
+    def test_parses_valid_json(self):
+        agent = IntegrationLeadAgent()
+        result = agent._parse_response(SAMPLE_AGENT_RESPONSE, "test_top")
+        assert result["module_name"] == "test_top"
+        assert "module test_top" in result["verilog"]
+        assert result["wire_count"] == 1
+        assert result["mismatches"] == []
+
+    def test_parses_json_with_surrounding_text(self):
+        agent = IntegrationLeadAgent()
+        content = f"Here is the result:\n{SAMPLE_AGENT_RESPONSE}\nDone."
+        result = agent._parse_response(content, "test_top")
+        assert result["module_name"] == "test_top"
+
+    def test_handles_invalid_json(self):
+        agent = IntegrationLeadAgent()
+        result = agent._parse_response("not json at all", "fallback")
+        assert result["parse_error"] is True
+        assert result["module_name"] == "fallback"
+        assert result["verilog"] == ""
+
+    def test_handles_empty_response(self):
+        agent = IntegrationLeadAgent()
+        result = agent._parse_response("", "fallback")
+        assert result["parse_error"] is True
+
+    def test_handles_partial_json(self):
+        agent = IntegrationLeadAgent()
+        result = agent._parse_response('{"verilog": "module t();', "fallback")
+        assert result["parse_error"] is True
+
+    def test_preserves_mismatches(self):
+        agent = IntegrationLeadAgent()
+        result = agent._parse_response(
+            SAMPLE_AGENT_RESPONSE_WITH_MISMATCHES, "test_top"
+        )
+        assert len(result["mismatches"]) == 1
+        assert result["mismatches"][0]["issue_type"] == "width_mismatch"
+        assert result["mismatches"][0]["severity"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# IntegrationLeadAgent._validate_result
+# ---------------------------------------------------------------------------
+
+class TestValidateResult:
+    def test_adds_default_severity(self):
+        agent = IntegrationLeadAgent()
+        data = {
+            "verilog": "module t(); endmodule",
+            "mismatches": [
+                {"from_block": "a", "to_block": "b", "description": "test"},
+            ],
+        }
+        result = agent._validate_result(data, "t")
+        assert result["mismatches"][0]["severity"] == "warning"
+        assert result["mismatches"][0]["issue_type"] == "unknown"
+
+    def test_adds_default_fields(self):
+        agent = IntegrationLeadAgent()
+        result = agent._validate_result({}, "default_name")
+        assert result["module_name"] == "default_name"
+        assert result["verilog"] == ""
+        assert result["mismatches"] == []
+        assert result["wire_count"] == 0
+
+    def test_warns_on_missing_module_declaration(self):
+        agent = IntegrationLeadAgent()
+        data = {"verilog": "assign x = y;"}
+        result = agent._validate_result(data, "test")
+        assert "WARNING" in result["notes"]
+
+
+# ---------------------------------------------------------------------------
+# IntegrationLeadAgent.integrate (end-to-end with mocked LLM)
+# ---------------------------------------------------------------------------
+
+class TestIntegrate:
+    @pytest.mark.asyncio
+    async def test_successful_integration(self):
+        agent = IntegrationLeadAgent()
+        with patch.object(
+            agent.llm, "call", new_callable=AsyncMock,
+            return_value=SAMPLE_AGENT_RESPONSE,
+        ):
+            result = await agent.integrate(
+                design_name="test_top",
+                block_rtl_sources={
+                    "block_a": SAMPLE_VERILOG_A,
+                    "block_b": SAMPLE_VERILOG_B,
+                },
+                block_port_summaries=SAMPLE_PORT_SUMMARIES,
+                connections=SAMPLE_CONNECTIONS,
+                prd_summary="Test chip",
+            )
+
+        assert result["module_name"] == "test_top"
+        assert "module test_top" in result["verilog"]
+        assert result["wire_count"] == 1
+        assert result["mismatches"] == []
+
+    @pytest.mark.asyncio
+    async def test_integration_with_mismatches(self):
+        agent = IntegrationLeadAgent()
+        with patch.object(
+            agent.llm, "call", new_callable=AsyncMock,
+            return_value=SAMPLE_AGENT_RESPONSE_WITH_MISMATCHES,
+        ):
+            result = await agent.integrate(
+                design_name="test_top",
+                block_rtl_sources={
+                    "block_a": SAMPLE_VERILOG_A,
+                    "block_b": SAMPLE_VERILOG_B,
+                },
+                block_port_summaries=SAMPLE_PORT_SUMMARIES,
+                connections=SAMPLE_CONNECTIONS,
+            )
+
+        assert len(result["mismatches"]) == 1
+        assert result["mismatches"][0]["severity"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_llm_called_with_correct_params(self):
+        agent = IntegrationLeadAgent()
+        mock_call = AsyncMock(return_value=SAMPLE_AGENT_RESPONSE)
+        with patch.object(agent.llm, "call", mock_call):
+            await agent.integrate(
+                design_name="my_design",
+                block_rtl_sources={"block_a": SAMPLE_VERILOG_A},
+                block_port_summaries=SAMPLE_PORT_SUMMARIES[:1],
+                connections=[],
+            )
+
+        mock_call.assert_called_once()
+        call_kwargs = mock_call.call_args
+        assert call_kwargs.kwargs["system"] == SYSTEM_PROMPT
+        assert "my_design" in call_kwargs.kwargs["prompt"]
+        assert "Integration Lead" in call_kwargs.kwargs["run_name"]
+
+    @pytest.mark.asyncio
+    async def test_handles_llm_returning_garbage(self):
+        agent = IntegrationLeadAgent()
+        with patch.object(
+            agent.llm, "call", new_callable=AsyncMock,
+            return_value="I don't know what to generate",
+        ):
+            result = await agent.integrate(
+                design_name="test",
+                block_rtl_sources={"a": "module a(); endmodule"},
+                block_port_summaries=[],
+                connections=[],
+            )
+
+        assert result.get("parse_error") is True
+
+
+# ---------------------------------------------------------------------------
+# Model name verification
+# ---------------------------------------------------------------------------
+
+class TestModelNameUpdates:
+    def test_integration_lead_default_model(self):
+        agent = IntegrationLeadAgent()
+        assert agent.llm.model == "opus-4.6"
+
+    def test_integration_testbench_default_model(self):
+        from orchestrator.langchain.agents.integration_testbench_generator import (
+            IntegrationTestbenchGenerator,
+        )
+        agent = IntegrationTestbenchGenerator()
+        assert agent.llm.model == "opus-4.6"
+
+    def test_cli_model_map_has_sonnet_46(self):
+        from orchestrator.langchain.agents.cursor_llm import _CLI_MODEL_MAP
+        assert "claude-sonnet-4-6" in _CLI_MODEL_MAP
+
+    def test_sonnet_46_resolves(self):
+        from orchestrator.langchain.agents.cursor_llm import _resolve_model
+        resolved = _resolve_model("claude-sonnet-4-6")
+        assert "claude-sonnet-4-6" in resolved
+
+
+# ---------------------------------------------------------------------------
+# Prompt file loading
+# ---------------------------------------------------------------------------
+
+class TestPromptLoading:
+    def test_system_prompt_loaded_from_file(self):
+        assert _PROMPT_FILE.exists(), f"Prompt file missing: {_PROMPT_FILE}"
+        assert len(SYSTEM_PROMPT) > 100
+        assert "Integration Lead" in SYSTEM_PROMPT
+
+    def test_prompt_requires_json_output(self):
+        assert "JSON" in SYSTEM_PROMPT
+
+    def test_prompt_covers_compatibility_analysis(self):
+        assert "missing_port" in SYSTEM_PROMPT
+        assert "width_mismatch" in SYSTEM_PROMPT
+        assert "direction_error" in SYSTEM_PROMPT
+
+    def test_prompt_covers_top_level_generation(self):
+        assert "Verilog" in SYSTEM_PROMPT
+        assert "module" in SYSTEM_PROMPT.lower()
+        assert "instantiate" in SYSTEM_PROMPT.lower() or "instantiat" in SYSTEM_PROMPT.lower()
+
+
+# ---------------------------------------------------------------------------
+# integration_check_node (pipeline graph node)
+# ---------------------------------------------------------------------------
+
+class TestIntegrationCheckNode:
+    """Test the updated integration_check_node that uses IntegrationLeadAgent."""
+
+    def _make_completed_blocks(self, names: list[str]) -> list[dict]:
+        return [
+            {
+                "name": n,
+                "success": True,
+                "rtl_path": f"/tmp/test/rtl/{n}/{n}.v",
+            }
+            for n in names
+        ]
+
+    def _make_state(self, blocks: list[dict], project_root: str = "/tmp/test") -> dict:
+        return {
+            "project_root": project_root,
+            "completed_blocks": blocks,
+            "pipeline_done": False,
+        }
+
+    @pytest.mark.asyncio
+    async def test_skips_with_fewer_than_2_blocks(self):
+        from orchestrator.langgraph.pipeline_graph import integration_check_node
+
+        blocks = self._make_completed_blocks(["only_one"])
+        state = self._make_state(blocks)
+
+        with patch(
+            "orchestrator.langgraph.pipeline_graph.write_graph_event"
+        ):
+            result = await integration_check_node(state)
+
+        ir = result["integration_result"]
+        assert ir["skipped"] is True
+        assert "fewer than 2" in ir["reason"].lower() or "1" in ir["reason"]
+
+    @pytest.mark.asyncio
+    async def test_skips_with_no_connections(self):
+        from orchestrator.langgraph.pipeline_graph import integration_check_node
+
+        blocks = self._make_completed_blocks(["a", "b"])
+        state = self._make_state(blocks)
+
+        with patch(
+            "orchestrator.langgraph.pipeline_graph.load_architecture_connections",
+            return_value=([], "chip_top"),
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.write_graph_event"
+        ):
+            result = await integration_check_node(state)
+
+        ir = result["integration_result"]
+        assert ir["skipped"] is True
+        assert "connection" in ir["reason"].lower()
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_rtl_parsed(self):
+        from orchestrator.langgraph.pipeline_graph import integration_check_node
+        from orchestrator.langgraph.integration_helpers import VerilogModule
+
+        blocks = self._make_completed_blocks(["a", "b"])
+        state = self._make_state(blocks)
+
+        empty_module = VerilogModule(name="", filepath="")
+
+        with patch(
+            "orchestrator.langgraph.pipeline_graph.load_architecture_connections",
+            return_value=(SAMPLE_CONNECTIONS, "chip_top"),
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.discover_block_rtl",
+            return_value={"a": "/tmp/a.v", "b": "/tmp/b.v"},
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.parse_verilog_ports",
+            return_value=empty_module,
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.write_graph_event"
+        ):
+            result = await integration_check_node(state)
+
+        ir = result["integration_result"]
+        assert ir["skipped"] is True
+        assert "parsed" in ir["reason"].lower()
+
+    @pytest.mark.asyncio
+    async def test_calls_integration_lead_agent(self):
+        from orchestrator.langgraph.pipeline_graph import integration_check_node
+        from orchestrator.langgraph.integration_helpers import (
+            VerilogModule, VerilogPort,
+        )
+
+        blocks = self._make_completed_blocks(["block_a", "block_b"])
+        state = self._make_state(blocks)
+
+        mod_a = VerilogModule(
+            name="block_a",
+            ports=[
+                VerilogPort("clk", "input"),
+                VerilogPort("rst_n", "input"),
+                VerilogPort("data_out", "output", width=8, msb=7, lsb=0),
+            ],
+        )
+        mod_b = VerilogModule(
+            name="block_b",
+            ports=[
+                VerilogPort("clk", "input"),
+                VerilogPort("rst_n", "input"),
+                VerilogPort("data_in", "input", width=8, msb=7, lsb=0),
+            ],
+        )
+
+        def _mock_parse(path):
+            if "block_a" in path:
+                return mod_a
+            return mod_b
+
+        mock_integrate = AsyncMock(return_value={
+            "verilog": "module test_top();\nendmodule\n",
+            "mismatches": [],
+            "module_name": "test_top",
+            "wire_count": 1,
+            "skipped_connections": [],
+            "notes": "",
+        })
+
+        with patch(
+            "orchestrator.langgraph.pipeline_graph.load_architecture_connections",
+            return_value=(SAMPLE_CONNECTIONS, "test_top"),
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.discover_block_rtl",
+            return_value={
+                "block_a": "/tmp/block_a.v",
+                "block_b": "/tmp/block_b.v",
+            },
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.parse_verilog_ports",
+            side_effect=_mock_parse,
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.lint_top_level",
+            return_value={"clean": True, "warnings": ""},
+        ), patch(
+            "orchestrator.langchain.agents.integration_lead.IntegrationLeadAgent.integrate",
+            mock_integrate,
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.write_graph_event"
+        ), patch(
+            "pathlib.Path.read_text",
+            return_value=SAMPLE_VERILOG_A,
+        ), patch(
+            "pathlib.Path.mkdir",
+        ), patch(
+            "pathlib.Path.write_text",
+        ):
+            result = await integration_check_node(state)
+
+        mock_integrate.assert_called_once()
+        call_kwargs = mock_integrate.call_args.kwargs
+        assert call_kwargs["design_name"] == "test_top"
+        assert "block_a" in call_kwargs["block_rtl_sources"]
+        assert "block_b" in call_kwargs["block_rtl_sources"]
+
+        ir = result["integration_result"]
+        assert ir["top_module"] == "test_top"
+        assert ir["lint_clean"] is True
+
+    @pytest.mark.asyncio
+    async def test_agent_failure_skips_gracefully(self):
+        from orchestrator.langgraph.pipeline_graph import integration_check_node
+        from orchestrator.langgraph.integration_helpers import (
+            VerilogModule, VerilogPort,
+        )
+
+        blocks = self._make_completed_blocks(["a", "b"])
+        state = self._make_state(blocks)
+
+        mod = VerilogModule(
+            name="a", ports=[VerilogPort("clk", "input")],
+        )
+
+        with patch(
+            "orchestrator.langgraph.pipeline_graph.load_architecture_connections",
+            return_value=(SAMPLE_CONNECTIONS, "chip_top"),
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.discover_block_rtl",
+            return_value={"a": "/tmp/a.v", "b": "/tmp/b.v"},
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.parse_verilog_ports",
+            return_value=mod,
+        ), patch(
+            "orchestrator.langchain.agents.integration_lead.IntegrationLeadAgent.integrate",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("LLM timeout"),
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.write_graph_event"
+        ), patch(
+            "pathlib.Path.read_text",
+            return_value="module a(); endmodule",
+        ):
+            result = await integration_check_node(state)
+
+        ir = result["integration_result"]
+        assert ir["skipped"] is True
+        assert "failed" in ir["reason"].lower()
+
+    @pytest.mark.asyncio
+    async def test_agent_parse_error_skips(self):
+        from orchestrator.langgraph.pipeline_graph import integration_check_node
+        from orchestrator.langgraph.integration_helpers import (
+            VerilogModule, VerilogPort,
+        )
+
+        blocks = self._make_completed_blocks(["a", "b"])
+        state = self._make_state(blocks)
+
+        mod = VerilogModule(
+            name="a", ports=[VerilogPort("clk", "input")],
+        )
+
+        with patch(
+            "orchestrator.langgraph.pipeline_graph.load_architecture_connections",
+            return_value=(SAMPLE_CONNECTIONS, "chip_top"),
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.discover_block_rtl",
+            return_value={"a": "/tmp/a.v", "b": "/tmp/b.v"},
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.parse_verilog_ports",
+            return_value=mod,
+        ), patch(
+            "orchestrator.langchain.agents.integration_lead.IntegrationLeadAgent.integrate",
+            new_callable=AsyncMock,
+            return_value={
+                "verilog": "",
+                "mismatches": [],
+                "module_name": "chip_top",
+                "wire_count": 0,
+                "skipped_connections": [],
+                "notes": "parse failed",
+                "parse_error": True,
+            },
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.write_graph_event"
+        ), patch(
+            "pathlib.Path.read_text",
+            return_value="module a(); endmodule",
+        ):
+            result = await integration_check_node(state)
+
+        ir = result["integration_result"]
+        assert ir["skipped"] is True
+        assert "unparseable" in ir["reason"].lower()
+
+    @pytest.mark.asyncio
+    async def test_lint_failure_triggers_interrupt(self):
+        from orchestrator.langgraph.pipeline_graph import integration_check_node
+        from orchestrator.langgraph.integration_helpers import (
+            VerilogModule, VerilogPort,
+        )
+
+        blocks = self._make_completed_blocks(["a", "b"])
+        state = self._make_state(blocks)
+
+        mod = VerilogModule(
+            name="a", ports=[VerilogPort("clk", "input")],
+        )
+
+        with patch(
+            "orchestrator.langgraph.pipeline_graph.load_architecture_connections",
+            return_value=(SAMPLE_CONNECTIONS, "chip_top"),
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.discover_block_rtl",
+            return_value={"a": "/tmp/a.v", "b": "/tmp/b.v"},
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.parse_verilog_ports",
+            return_value=mod,
+        ), patch(
+            "orchestrator.langchain.agents.integration_lead.IntegrationLeadAgent.integrate",
+            new_callable=AsyncMock,
+            return_value={
+                "verilog": "module test();\nendmodule\n",
+                "mismatches": [],
+                "module_name": "chip_top",
+                "wire_count": 0,
+                "skipped_connections": [],
+                "notes": "",
+            },
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.lint_top_level",
+            return_value={"clean": False, "errors": "syntax error line 5"},
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.interrupt",
+            return_value={"action": "skip"},
+        ) as mock_interrupt, patch(
+            "orchestrator.langgraph.pipeline_graph.write_graph_event"
+        ), patch(
+            "pathlib.Path.read_text",
+            return_value="module a(); endmodule",
+        ), patch(
+            "pathlib.Path.mkdir",
+        ), patch(
+            "pathlib.Path.write_text",
+        ):
+            result = await integration_check_node(state)
+
+        mock_interrupt.assert_called_once()
+        payload = mock_interrupt.call_args[0][0]
+        assert payload["type"] == "integration_failure"
+        assert payload["lint_clean"] is False
+        assert "skip" in payload["supported_actions"]
+
+        ir = result["integration_result"]
+        assert ir.get("skipped_by_user") is True
+
+    @pytest.mark.asyncio
+    async def test_mismatch_errors_trigger_interrupt(self):
+        from orchestrator.langgraph.pipeline_graph import integration_check_node
+        from orchestrator.langgraph.integration_helpers import (
+            VerilogModule, VerilogPort,
+        )
+
+        blocks = self._make_completed_blocks(["a", "b"])
+        state = self._make_state(blocks)
+
+        mod = VerilogModule(
+            name="a", ports=[VerilogPort("clk", "input")],
+        )
+
+        with patch(
+            "orchestrator.langgraph.pipeline_graph.load_architecture_connections",
+            return_value=(SAMPLE_CONNECTIONS, "chip_top"),
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.discover_block_rtl",
+            return_value={"a": "/tmp/a.v", "b": "/tmp/b.v"},
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.parse_verilog_ports",
+            return_value=mod,
+        ), patch(
+            "orchestrator.langchain.agents.integration_lead.IntegrationLeadAgent.integrate",
+            new_callable=AsyncMock,
+            return_value={
+                "verilog": "module chip_top();\nendmodule\n",
+                "mismatches": [
+                    {
+                        "from_block": "a",
+                        "to_block": "b",
+                        "issue_type": "missing_port",
+                        "severity": "error",
+                        "description": "Port not found",
+                        "suggested_fix": "Add port",
+                    },
+                ],
+                "module_name": "chip_top",
+                "wire_count": 0,
+                "skipped_connections": [],
+                "notes": "",
+            },
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.lint_top_level",
+            return_value={"clean": True, "warnings": ""},
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.interrupt",
+            return_value={"action": "abort"},
+        ) as mock_interrupt, patch(
+            "orchestrator.langgraph.pipeline_graph.write_graph_event"
+        ), patch(
+            "pathlib.Path.read_text",
+            return_value="module a(); endmodule",
+        ), patch(
+            "pathlib.Path.mkdir",
+        ), patch(
+            "pathlib.Path.write_text",
+        ):
+            result = await integration_check_node(state)
+
+        mock_interrupt.assert_called_once()
+        payload = mock_interrupt.call_args[0][0]
+        assert payload["error_count"] == 1
+
+        ir = result["integration_result"]
+        assert ir.get("aborted") is True
+
+    @pytest.mark.asyncio
+    async def test_clean_integration_passes(self):
+        from orchestrator.langgraph.pipeline_graph import integration_check_node
+        from orchestrator.langgraph.integration_helpers import (
+            VerilogModule, VerilogPort,
+        )
+
+        blocks = self._make_completed_blocks(["a", "b"])
+        state = self._make_state(blocks)
+
+        mod = VerilogModule(
+            name="a", ports=[VerilogPort("clk", "input")],
+        )
+
+        with patch(
+            "orchestrator.langgraph.pipeline_graph.load_architecture_connections",
+            return_value=(SAMPLE_CONNECTIONS, "test_top"),
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.discover_block_rtl",
+            return_value={"a": "/tmp/a.v", "b": "/tmp/b.v"},
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.parse_verilog_ports",
+            return_value=mod,
+        ), patch(
+            "orchestrator.langchain.agents.integration_lead.IntegrationLeadAgent.integrate",
+            new_callable=AsyncMock,
+            return_value={
+                "verilog": "module test_top();\nendmodule\n",
+                "mismatches": [],
+                "module_name": "test_top",
+                "wire_count": 3,
+                "skipped_connections": [],
+                "notes": "All clean",
+            },
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.lint_top_level",
+            return_value={"clean": True, "warnings": ""},
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.write_graph_event"
+        ), patch(
+            "pathlib.Path.read_text",
+            return_value="module a(); endmodule",
+        ), patch(
+            "pathlib.Path.mkdir",
+        ), patch(
+            "pathlib.Path.write_text",
+        ):
+            result = await integration_check_node(state)
+
+        ir = result["integration_result"]
+        assert ir["lint_clean"] is True
+        assert ir["error_count"] == 0
+        assert ir["wire_count"] == 3
+        assert ir["top_module"] == "test_top"
+        assert ir.get("skipped") is None
+        assert ir.get("aborted") is None
+
+    @pytest.mark.asyncio
+    async def test_fix_rtl_resume_action(self):
+        from orchestrator.langgraph.pipeline_graph import integration_check_node
+        from orchestrator.langgraph.integration_helpers import (
+            VerilogModule, VerilogPort,
+        )
+
+        blocks = self._make_completed_blocks(["a", "b"])
+        state = self._make_state(blocks)
+
+        mod = VerilogModule(
+            name="a", ports=[VerilogPort("clk", "input")],
+        )
+
+        with patch(
+            "orchestrator.langgraph.pipeline_graph.load_architecture_connections",
+            return_value=(SAMPLE_CONNECTIONS, "chip_top"),
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.discover_block_rtl",
+            return_value={"a": "/tmp/a.v", "b": "/tmp/b.v"},
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.parse_verilog_ports",
+            return_value=mod,
+        ), patch(
+            "orchestrator.langchain.agents.integration_lead.IntegrationLeadAgent.integrate",
+            new_callable=AsyncMock,
+            return_value={
+                "verilog": "module chip_top();\nendmodule\n",
+                "mismatches": [],
+                "module_name": "chip_top",
+                "wire_count": 0,
+                "skipped_connections": [],
+                "notes": "",
+            },
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.lint_top_level",
+            return_value={"clean": False, "errors": "undeclared wire"},
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.interrupt",
+            return_value={
+                "action": "fix_rtl",
+                "rtl_fix_description": "Added wire declaration",
+            },
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.write_graph_event"
+        ), patch(
+            "pathlib.Path.read_text",
+            return_value="module a(); endmodule",
+        ), patch(
+            "pathlib.Path.mkdir",
+        ), patch(
+            "pathlib.Path.write_text",
+        ):
+            result = await integration_check_node(state)
+
+        ir = result["integration_result"]
+        assert ir["fix_applied"] == "Added wire declaration"
+
+    @pytest.mark.asyncio
+    async def test_only_successful_blocks_used(self):
+        from orchestrator.langgraph.pipeline_graph import integration_check_node
+
+        blocks = [
+            {"name": "a", "success": True, "rtl_path": "/tmp/a.v"},
+            {"name": "b", "success": False, "rtl_path": "/tmp/b.v"},
+            {"name": "c", "success": True, "rtl_path": "/tmp/c.v"},
+        ]
+        state = self._make_state(blocks)
+
+        with patch(
+            "orchestrator.langgraph.pipeline_graph.load_architecture_connections",
+            return_value=([], "chip_top"),
+        ), patch(
+            "orchestrator.langgraph.pipeline_graph.write_graph_event"
+        ):
+            result = await integration_check_node(state)
+
+        ir = result["integration_result"]
+        assert ir["skipped"] is True
+
+
+# ---------------------------------------------------------------------------
+# Graph construction still works
+# ---------------------------------------------------------------------------
+
+class TestGraphConstruction:
+    def test_pipeline_graph_compiles_with_agent_node(self):
+        from langgraph.checkpoint.memory import MemorySaver
+        from orchestrator.langgraph.pipeline_graph import build_pipeline_graph
+
+        graph = build_pipeline_graph(checkpointer=MemorySaver())
+        assert graph is not None
+
+    def test_integration_check_node_in_graph(self):
+        from langgraph.checkpoint.memory import MemorySaver
+        from orchestrator.langgraph.pipeline_graph import build_pipeline_graph
+
+        graph = build_pipeline_graph(checkpointer=MemorySaver())
+        node_names = list(graph.get_graph().nodes.keys())
+        assert "integration_check" in node_names
+        assert "integration_dv" in node_names
+
+
+# ---------------------------------------------------------------------------
+# Integration helpers still work (parse_verilog_ports, lint, etc.)
+# ---------------------------------------------------------------------------
+
+class TestIntegrationHelpers:
+    def test_parse_verilog_ports_ansi(self, tmp_path):
+        from orchestrator.langgraph.integration_helpers import parse_verilog_ports
+
+        rtl_file = tmp_path / "test.v"
+        rtl_file.write_text(SAMPLE_VERILOG_A)
+
+        mod = parse_verilog_ports(str(rtl_file))
+        assert mod.name == "block_a"
+        assert len(mod.ports) == 4
+        assert mod.port_by_name("data_in").width == 8
+        assert mod.port_by_name("data_out").direction == "output"
+
+    def test_parse_verilog_ports_nonexistent(self):
+        from orchestrator.langgraph.integration_helpers import parse_verilog_ports
+
+        mod = parse_verilog_ports("/nonexistent/file.v")
+        assert mod.name == ""
+
+    def test_discover_block_rtl(self, tmp_path):
+        from orchestrator.langgraph.integration_helpers import discover_block_rtl
+
+        rtl_dir = tmp_path / "rtl" / "block_a"
+        rtl_dir.mkdir(parents=True)
+        (rtl_dir / "block_a.v").write_text(SAMPLE_VERILOG_A)
+
+        completed = [
+            {"name": "block_a", "success": True},
+        ]
+        paths = discover_block_rtl(str(tmp_path), completed)
+        assert "block_a" in paths
+
+    def test_load_architecture_connections_empty(self, tmp_path):
+        from orchestrator.langgraph.integration_helpers import (
+            load_architecture_connections,
+        )
+
+        (tmp_path / ".socmate").mkdir()
+        connections, name = load_architecture_connections(str(tmp_path))
+        assert connections == []
+        assert name == "chip_top"

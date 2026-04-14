@@ -1,0 +1,33 @@
+# socmate -- AI-orchestrated ASIC pipeline
+# Core dependencies
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-asyncio>=0.23.0
+
+# Orchestrator -- LangGraph pipeline
+langgraph>=0.4.0
+langgraph-checkpoint-sqlite>=2.0.0
+langchain-core>=0.3.0
+langchain-anthropic>=0.3.0
+
+# Orchestrator -- telemetry
+opentelemetry-sdk>=1.20.0
+opentelemetry-api>=1.20.0
+
+# Orchestrator -- config & templating
+pyyaml>=6.0
+jinja2>=3.1.0
+pydantic>=2.0.0
+
+# Orchestrator -- MCP server
+mcp>=1.0.0
+
+# Orchestrator -- 3D GDS layout viewer
+gdstk>=0.9.0
+pygltflib>=1.16.0
+mapbox-earcut>=1.0.0
+
+# Cocotb (RTL simulation)
+cocotb>=2.0

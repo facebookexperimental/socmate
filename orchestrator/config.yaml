@@ -1,0 +1,136 @@
+# socmate ASIC Orchestrator Configuration
+# ======================================
+
+project:
+  name: socmate-asic
+  target_pdk: sky130
+  target_clock_mhz: 50
+  rtl_language: verilog-2005
+  synthesis_tool: yosys
+  process_constraints: "No tri-state buffers, no async resets, no latches (Sky130 limitations)."
+
+# Backend physical design tool configuration (Nix-wrapped)
+backend:
+  openroad_binary: "scripts/openroad-nix.sh"
+  magic_binary: "scripts/magic-nix.sh"
+  netgen_binary: "scripts/netgen-nix.sh"
+  yosys_binary: "scripts/yosys-nix.sh"
+  pdk_variant: "sky130A"
+  std_cell_lib: "sky130_fd_sc_hd"
+  rcx_rules: ".pdk/sky130A/libs.tech/rcx/sky130hd_rcx_patterns.rules"
+  target_utilization: 45
+  target_density: 0.6
+  pnr_timeout_s: 1800
+  drc_timeout_s: 600
+  lvs_timeout_s: 600
+  klayout_binary: "scripts/klayout-nix.sh"
+
+# Tapeout (OpenFrame shuttle submission)
+tapeout:
+  target: "openframe"
+  die_width_um: 3520.0
+  die_height_um: 5188.0
+  core_margin_um: 100.0
+  io_pads: 44
+  wrapper_pnr_timeout_s: 3600
+  wrapper_drc_timeout_s: 1200
+  precheck_timeout_s: 1800
+
+# Golden model directories to scan for block diagram grounding.
+# Uncomment and customise for your project.  If absent, auto-discovery is used.
+# golden_model_dirs:
+#   - path: "models/my_dsp"
+#     label: "DSP blocks"
+
+# Temporal workflow engine
+temporal:
+  address: "localhost:7233"
+  namespace: "socmate-asic"
+  task_queue: "asic-pipeline"
+
+  # Default retry policies
+  retry_policies:
+    rtl_generation:
+      initial_interval_s: 10
+      backoff_coefficient: 2.0
+      maximum_interval_s: 300
+      maximum_attempts: 5
+    eda_tools:
+      initial_interval_s: 30
+      backoff_coefficient: 1.5
+      maximum_interval_s: 600
+      maximum_attempts: 3
+    simulation:
+      initial_interval_s: 60
+      backoff_coefficient: 2.0
+      maximum_interval_s: 1800
+      maximum_attempts: 3
+
+  # Activity timeouts
+  timeouts:
+    rtl_generation_s: 300
+    lint_s: 60
+    testbench_generation_s: 300
+    simulation_s: 7200        # 2 hours (Viterbi sim is slow)
+    synthesis_s: 3600
+    sta_s: 600
+    pnr_s: 7200
+    drc_s: 1800
+    lvs_s: 1800
+    failure_analysis_s: 300
+
+# LangChain agent configuration
+# Provider: Claude CLI (install: npm install -g @anthropic-ai/claude-code)
+langchain:
+  model: "opus-4.6"
+  temperature: 0.1
+  max_tokens: 16000
+
+  agents:
+    rtl_generator:
+      system_prompt_file: "langchain/prompts/rtl_generator.md"
+      tools: ["file_read", "file_write", "yosys_lint", "verilator_lint"]
+    testbench_generator:
+      system_prompt_file: "langchain/prompts/testbench_generator.md"
+      tools: ["file_read", "file_write", "cocotb_template"]
+    debug:
+      system_prompt_file: "langchain/prompts/debug_agent.md"
+      tools: ["file_read", "waveform_summary", "signal_trace", "rtl_grep"]
+    timing_closure:
+      system_prompt_file: "langchain/prompts/timing_closure.md"
+      tools: ["file_read", "file_write", "opensta_report", "insert_pipeline_stage"]
+
+# OpenTelemetry tracing (lightweight SQLite-backed collector)
+telemetry:
+  enabled: true
+  trace_db: ".socmate/traces.db"
+
+# Block registry -- maps Python source to RTL target.
+# OPTIONAL: If omitted, blocks come from .socmate/block_specs.json (architecture output)
+# or from an external file via start_pipeline(blocks_file="...").
+# See config.yaml block registry documentation for examples.
+# blocks:
+#   my_block:
+#     tier: 1
+#     python_source: "src/my_block.py"
+#     rtl_target: "rtl/my_block.v"
+#     testbench: "tb/cocotb/test_my_block.py"
+#     description: "My custom block"
+
+# Observer LLM (generates .socmate/summary_*.md after significant node transitions)
+observer:
+  enabled: true
+  cooldown_s: 300  # minimum seconds between observer LLM calls per stage
+
+# Architecture stage configuration
+architecture:
+  max_block_attempts: 5
+  pdk_config: "pdk/configs/sky130.yaml"
+  benchmark_timeout_s: 60
+  benchmark_cache_db: ".socmate/benchmark_cache.db"
+  state_dir: ".socmate"
+  revision_triggers:
+    - "simulation_fail_after_max_retries"
+    - "timing_violation_unfixable"
+    - "area_exceeds_budget"
+    - "interface_incompatibility"
