@@ -1,0 +1,96 @@
+# Authentication
+
+socmate's pipeline calls Anthropic's API through the [Claude Code CLI](https://docs.claude.com/en/docs/claude-code/overview). The CLI accepts three credential sources, checked in this order:
+
+1. **`CLAUDE_CODE_OAUTH_TOKEN`** — long-lived OAuth token from `claude setup-token`. Recommended for CI, Docker, RunPod, GitHub Codespaces.
+2. **`ANTHROPIC_API_KEY`** — raw API key from <https://console.anthropic.com/>. Bills your console workspace; *not* your Claude.ai/Pro subscription.
+3. **Interactive browser login** — `claude auth login` opens a browser; only works when a desktop browser is reachable from the terminal.
+
+If you have a Claude Pro/Max subscription, **option 1 is the right choice** — it bills against your subscription, not the API console. Option 2 is for users who want or need API-billed usage (typically heavier programmatic workloads).
+
+---
+
+## Option 1: OAuth token (recommended)
+
+```bash
+# On a machine with a browser, run once:
+claude setup-token
+# Copy the printed token (starts with `sk-ant-oat01-...`).
+
+# On the machine that will run socmate:
+export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+```
+
+The token is long-lived; rotate it via the same command.
+
+### In Docker
+
+```bash
+docker run --rm -it \
+    -e CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-... \
+    socmate:latest
+```
+
+### In RunPod
+
+Set `CLAUDE_CODE_OAUTH_TOKEN` as a pod environment variable in the template (see [docs/RUNPOD.md](RUNPOD.md)).
+
+### In GitHub Codespaces
+
+1. On your fork: **Settings → Secrets and variables → Codespaces → New secret**
+2. Name: `CLAUDE_CODE_OAUTH_TOKEN`
+3. Value: the token from `claude setup-token`
+
+The devcontainer config (`.devcontainer/devcontainer.json`) forwards the secret automatically.
+
+### In GitHub Actions (nightly e2e)
+
+Same as Codespaces, but under **Settings → Secrets and variables → Actions**.
+
+---
+
+## Option 2: API key (console-billed)
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-api03-...
+```
+
+If both `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` are set, the OAuth token wins. To force API billing, unset the OAuth token.
+
+---
+
+## Option 3: Interactive login
+
+Only useful on a developer machine with a desktop browser:
+
+```bash
+claude auth login
+```
+
+This will not work inside a headless Docker container, RunPod pod, or CI runner — use options 1 or 2 there.
+
+---
+
+## Verifying
+
+Quick check that the CLI is wired up:
+
+```bash
+claude --version            # should print a 2.x version string
+echo 'say hi' | claude -p   # should round-trip a short response
+```
+
+If `claude -p` hangs or returns an auth error, neither token nor key are being seen by the CLI — re-export them in the same shell.
+
+---
+
+## What model gets used
+
+socmate defaults to `opus-4.7` (the most capable model). Override with `SOCMATE_MODEL`:
+
+```bash
+export SOCMATE_MODEL=sonnet-4.6   # ~5x cheaper, slightly less reliable on hard blocks
+export SOCMATE_MODEL=haiku-4.5    # cheapest; fine for trivial blocks
+```
+
+The mapping from short names (`opus-4.7`, `sonnet-4.6`, `haiku-4.5`, …) to full CLI model IDs lives in `orchestrator/langchain/agents/socmate_llm.py`. Unknown short names pass through verbatim, so any model the CLI accepts works.

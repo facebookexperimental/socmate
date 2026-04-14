@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+
+# Environment variables
+.env
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Pytest
+.pytest_cache/
+
+# IDE / Editor
+.vscode/
+.idea/
+.mcp.json
+.claude/
+.cursor/
+
+# Node
+node_modules/
+
+# PDK (large external data, downloaded at install time)
+.pdk/
+
+# Pipeline-generated artifacts
+rtl/
+tb/
+syn/
+sim_build/
+verification/
+arch/
+
+# Runtime / pipeline data
+.socmate/
+.txrx/
+
+# Images and binary assets
+*.png
+*.jpg
+*.jpeg
+*.gif
+!docs/images/*.gif
+
+# One-off verification scripts
+verify_*.py
+
+# EDA extraction artifacts
+*.ext
+
+# Generated dashboard copies
+dashboard.html
+
+# Archived pipeline runs
+archive/
+
+# Chip finish output
+chip_finish/
+
+# OS files
+.DS_Store
+Thumbs.db
