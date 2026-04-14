@@ -1,0 +1,18 @@
+{
+  "_comment": "Paste this into RunPod's pod template editor. See docs/RUNPOD.md for details. Replace 'your-registry/socmate:latest' with your actual image. Leave ANTHROPIC_API_KEY blank in the template and supply it when deploying so the secret never lives in the template definition.",
+  "name": "socmate",
+  "imageName": "your-registry/socmate:latest",
+  "containerDiskInGb": 60,
+  "volumeInGb": 50,
+  "volumeMountPath": "/socmate/.socmate",
+  "ports": "8765/http",
+  "env": [
+    { "key": "SOCMATE_MODE",         "value": "shell" },
+    { "key": "SOCMATE_MODEL",        "value": "" },
+    { "key": "ANTHROPIC_API_KEY",    "value": "" },
+    { "key": "CLAUDE_CODE_OAUTH_TOKEN", "value": "" },
+    { "key": "MCP_PORT",             "value": "8765" },
+    { "key": "PYTHONUNBUFFERED",     "value": "1" }
+  ],
+  "dockerArgs": ""
+}

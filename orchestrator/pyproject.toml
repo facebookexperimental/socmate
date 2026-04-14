@@ -1,0 +1,40 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+[project]
+name = "socmate-asic-orchestrator"
+version = "0.1.0"
+description = "AI-orchestrated ASIC design pipeline using LangGraph"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=0.4.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+    "opentelemetry-api>=1.0",
+    "opentelemetry-sdk>=1.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "jinja2>=3.1",
+    "mcp>=1.0.0",
+    "gdstk>=0.9.0",
+    "pygltflib>=1.16.0",
+    "mapbox-earcut>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["temporal*", "langchain*", "langgraph*", "architecture*", "pdk*", "telemetry*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

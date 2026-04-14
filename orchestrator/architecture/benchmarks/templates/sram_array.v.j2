@@ -1,0 +1,27 @@
+// Copyright (c) Meta Platforms, Inc. and affiliates.
+// This source code is licensed under the MIT license found in the
+// LICENSE file in the root directory of this source tree.
+
+// Benchmark: {{ depth }}-entry x {{ width }}-bit register-file array
+// Auto-generated for PDK characterization. Do not edit.
+// Note: this maps to flip-flops, not SRAM macros.
+
+module benchmark_sram_array (
+    input  wire                          clk,
+    input  wire                          rst_n,
+    input  wire [$clog2({{ depth }})-1:0] addr,
+    input  wire [{{ width - 1 }}:0]       wdata,
+    input  wire                          we,
+    output reg  [{{ width - 1 }}:0]       rdata
+);
+
+    reg [{{ width - 1 }}:0] mem [0:{{ depth - 1 }}];
+
+    always @(posedge clk) begin
+        if (we) begin
+            mem[addr] <= wdata;
+        end
+        rdata <= mem[addr];
+    end
+
+endmodule

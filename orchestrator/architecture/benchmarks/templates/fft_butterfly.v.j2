@@ -1,0 +1,50 @@
+// Copyright (c) Meta Platforms, Inc. and affiliates.
+// This source code is licensed under the MIT license found in the
+// LICENSE file in the root directory of this source tree.
+
+// Benchmark: Radix-{{ radix }} FFT butterfly, {{ width }}-bit data
+// Auto-generated for PDK characterization. Do not edit.
+
+module benchmark_fft_butterfly (
+    input  wire                    clk,
+    input  wire                    rst_n,
+    input  wire signed [{{ width - 1 }}:0] ar,   // real part A
+    input  wire signed [{{ width - 1 }}:0] ai,   // imag part A
+    input  wire signed [{{ width - 1 }}:0] br,   // real part B
+    input  wire signed [{{ width - 1 }}:0] bi,   // imag part B
+    input  wire signed [{{ width - 1 }}:0] wr,   // twiddle real
+    input  wire signed [{{ width - 1 }}:0] wi,   // twiddle imag
+    input  wire                    valid_in,
+    output reg  signed [{{ width }}:0]     xr,   // output X real
+    output reg  signed [{{ width }}:0]     xi,   // output X imag
+    output reg  signed [{{ width }}:0]     yr,   // output Y real
+    output reg  signed [{{ width }}:0]     yi,   // output Y imag
+    output reg                     valid_out
+);
+
+    // Twiddle multiply: (br + j*bi) * (wr + j*wi)
+    wire signed [{{ 2 * width - 1 }}:0] mult_rr = br * wr;
+    wire signed [{{ 2 * width - 1 }}:0] mult_ii = bi * wi;
+    wire signed [{{ 2 * width - 1 }}:0] mult_ri = br * wi;
+    wire signed [{{ 2 * width - 1 }}:0] mult_ir = bi * wr;
+
+    // Truncate back to data width (Q format shift)
+    wire signed [{{ width - 1 }}:0] tw_r = (mult_rr - mult_ii) >>> {{ width // 2 }};
+    wire signed [{{ width - 1 }}:0] tw_i = (mult_ri + mult_ir) >>> {{ width // 2 }};
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            xr <= 0; xi <= 0;
+            yr <= 0; yi <= 0;
+            valid_out <= 0;
+        end else begin
+            // Butterfly: X = A + W*B, Y = A - W*B
+            xr <= ar + tw_r;
+            xi <= ai + tw_i;
+            yr <= ar - tw_r;
+            yi <= ai - tw_i;
+            valid_out <= valid_in;
+        end
+    end
+
+endmodule

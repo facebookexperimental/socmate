@@ -1,0 +1,29 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+# SkyWater Sky130 PDK Configuration
+# ==================================
+# Extracted from hardcoded values previously scattered across:
+#   - orchestrator/temporal/activities/eda_activities.py (line 66)
+#   - orchestrator/config.yaml (line 6)
+#   - orchestrator/langchain/tools/eda_tools.py (line 148)
+#   - history/syn/sta/*.tcl scripts
+#   - history/pnr/output/*.tcl scripts
+
+name: sky130
+process_nm: 130
+std_cell_library: sky130_fd_sc_hd
+site_name: unithd
+supply_voltage: 1.8
+default_corner: tt_025C_1v80
+
+corners:
+  tt_025C_1v80:
+    liberty: "{pdk_root}/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib"
+    temperature: 25
+    voltage: 1.8
+    process: typical
+
+lef: "{pdk_root}/sky130A/libs.ref/sky130_fd_sc_hd/lef/sky130_fd_sc_hd.lef"
+tech_lef: "{pdk_root}/sky130A/libs.ref/sky130_fd_sc_hd/techlef/sky130_fd_sc_hd__nom.tlef"

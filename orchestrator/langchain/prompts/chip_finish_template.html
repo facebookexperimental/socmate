@@ -1,0 +1,520 @@
+<!--
+  Copyright (c) Meta Platforms, Inc. and affiliates.
+  This source code is licensed under the MIT license found in the
+  LICENSE file in the root directory of this source tree.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ design_name }} — Chip Finish Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://wavedrom.com/skins/default.js" type="text/javascript"></script>
+<script src="https://wavedrom.com/wavedrom.min.js" type="text/javascript"></script>
+<style>
+:root{--bg:#0f1724;--card:#1a2332;--card2:#1e293b;--border:#2d3a4a;--text:#e2e8f0;--muted:#94a3b8;--accent:#3b82f6;--green:#22c55e;--red:#ef4444;--amber:#f59e0b;--purple:#a78bfa;--sidebar-w:220px;--sidebar-bg:#0c1220;--code-bg:#0f1724;--heading:#e2e8f0;--wavedrom-bg:#1e293b;}
+[data-theme="light"]{--bg:#f8fafc;--card:#ffffff;--card2:#f1f5f9;--border:#cbd5e1;--text:#1e293b;--muted:#64748b;--accent:#2563eb;--green:#16a34a;--red:#dc2626;--amber:#d97706;--purple:#7c3aed;--sidebar-bg:#ffffff;--code-bg:#f1f5f9;--heading:#0f172a;--wavedrom-bg:#f1f5f9;}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);display:flex;min-height:100vh;}
+nav{position:fixed;top:0;left:0;width:var(--sidebar-w);height:100vh;background:var(--sidebar-bg);border-right:1px solid var(--border);overflow-y:auto;z-index:100;padding:16px 0;display:flex;flex-direction:column;}
+nav h2{padding:0 16px 12px;font-size:14px;color:var(--accent);letter-spacing:1px;text-transform:uppercase;}
+nav a{display:block;padding:7px 16px;color:var(--muted);text-decoration:none;font-size:13px;border-left:3px solid transparent;transition:.2s;}
+nav a:hover,nav a.active{color:var(--text);background:var(--card);border-left-color:var(--accent);}
+nav .nav-group{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;padding:12px 16px 4px;opacity:.6;}
+main{margin-left:var(--sidebar-w);flex:1;padding:24px;max-width:1200px;}
+section{margin-bottom:32px;}
+h1{font-size:28px;margin-bottom:4px;}
+h2{font-size:20px;margin-bottom:12px;color:var(--accent);border-bottom:1px solid var(--border);padding-bottom:6px;}
+h3{font-size:16px;margin:12px 0 8px;color:var(--text);}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px;}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;}
+.card .label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;}
+.card .value{font-size:20px;font-weight:700;margin-top:4px;}
+.pass{color:var(--green);}.fail{color:var(--red);}.warn{color:var(--amber);}
+table{width:100%;border-collapse:collapse;margin:8px 0;font-size:13px;}
+th,td{padding:6px 10px;border:1px solid var(--border);text-align:left;}
+th{background:var(--card2);color:var(--muted);font-size:11px;text-transform:uppercase;}
+td{background:var(--card);}
+.bar-track{background:var(--card2);border-radius:6px;overflow:hidden;height:28px;display:flex;margin:8px 0;}
+.bar-seg{height:100%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#fff;white-space:nowrap;padding:0 6px;min-width:40px;}
+.doc-tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;}
+.doc-tabs button{background:var(--card2);color:var(--muted);border:1px solid var(--border);padding:6px 14px;border-radius:6px 6px 0 0;cursor:pointer;font-size:13px;transition:none;}
+@keyframes tab-glow{0%,100%{box-shadow:0 0 6px rgba(118,185,0,.45),0 -2px 8px rgba(118,185,0,.15) inset;}50%{box-shadow:0 0 14px rgba(118,185,0,.75),0 -2px 12px rgba(118,185,0,.3) inset;}}
+.doc-tabs button.active{background:#16260a;color:#76b900;border-color:#4a7a00;border-bottom-color:#16260a;font-weight:600;animation:tab-glow 2s ease-in-out infinite;text-shadow:0 0 6px rgba(118,185,0,.5);}
+.doc-tabs button.active::after{content:'Working';margin-left:6px;font-size:10px;font-weight:700;background:#76b900;color:#0a1a00;padding:1px 6px;border-radius:8px;letter-spacing:.3px;text-shadow:none;vertical-align:middle;}
+[data-theme="light"] .doc-tabs button.active{background:#edffd6;color:#4a7a00;border-color:#76b900;border-bottom-color:#edffd6;text-shadow:none;}
+[data-theme="light"] .doc-tabs button.active::after{background:#4a7a00;color:#edffd6;}
+.doc-panel{display:none;background:var(--card);border:1px solid var(--border);border-radius:0 8px 8px 8px;padding:16px;max-height:600px;overflow-y:auto;font-size:13px;line-height:1.7;}
+.doc-panel.active{display:block;}
+.doc-panel h1,.doc-panel h2,.doc-panel h3{color:var(--accent);}
+.doc-panel h1{font-size:20px;border-bottom:1px solid var(--border);padding-bottom:4px;margin-bottom:8px;}
+.doc-panel h2{font-size:17px;margin-top:16px;}
+.doc-panel h3{font-size:14px;}
+.doc-panel ul,.doc-panel ol{padding-left:20px;margin:6px 0;}
+.doc-panel table{font-size:12px;}
+.doc-panel code{background:var(--code-bg);padding:2px 5px;border-radius:3px;font-size:12px;}
+.doc-panel pre{background:var(--code-bg);padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;margin:8px 0;color:var(--text);}
+.chip{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;}
+.chip-green{background:#166534;color:#86efac;}
+.chip-red{background:#7f1d1d;color:#fca5a5;}
+.chip-amber{background:#78350f;color:#fde68a;}
+.mermaid{background:var(--card2);border-radius:8px;padding:12px;margin:8px 0;}
+details{margin:4px 0;}
+details summary{cursor:pointer;padding:6px 10px;background:var(--card2);border:1px solid var(--border);border-radius:6px;font-size:13px;list-style:none;display:flex;justify-content:space-between;align-items:center;}
+details summary::-webkit-details-marker{display:none;}
+details[open] summary{border-radius:6px 6px 0 0;}
+details .det-body{background:var(--card);border:1px solid var(--border);border-top:0;border-radius:0 0 6px 6px;padding:8px 12px;}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;}
+.dot-pass{background:var(--green);}.dot-fail{background:var(--red);}
+.wavedrom-container{background:var(--wavedrom-bg);border-radius:6px;padding:12px;}
+.btn{display:inline-block;padding:8px 16px;background:var(--accent);color:#fff;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600;border:none;cursor:pointer;margin:4px;}
+.btn:hover{opacity:.85;}
+.btn-outline{background:transparent;border:1px solid var(--accent);color:var(--accent);}
+canvas{max-width:100%;}
+.chart-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:8px 0;}
+.code-viewer{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:16px;overflow:auto;max-height:600px;font-family:'Fira Code',Consolas,'Courier New',monospace;font-size:12px;line-height:1.6;white-space:pre;tab-size:4;color:var(--text);}
+.code-viewer .line-num{display:inline-block;width:40px;color:#475569;text-align:right;padding-right:12px;user-select:none;}
+@media(max-width:800px){nav{display:none;}main{margin-left:0;}.chart-row{grid-template-columns:1fr;}}
+</style>
+<script>
+(function(){
+  var t = localStorage.getItem('socmate-theme');
+  if (!t && window.matchMedia('(prefers-color-scheme: light)').matches) t = 'light';
+  if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+})();
+</script>
+</head>
+<body>
+<nav>
+<h2>{{ design_name }}</h2>
+<div class="nav-group">Architecture</div>
+<a href="#summary">Summary</a>
+<a href="#blockdiagram">Block Diagram</a>
+<a href="#documents">Documents</a>
+<div class="nav-group">Frontend</div>
+<a href="#rtl">RTL Source</a>
+<a href="#testbenches">Testbenches</a>
+<a href="#vplan">Verification</a>
+<a href="#waveform">Waveforms</a>
+<div class="nav-group">Backend</div>
+<a href="#synthesis">Synthesis</a>
+<a href="#critpath">Critical Path</a>
+<a href="#layout">Layout / GDS</a>
+{% if tapeout.has_tapeout %}<a href="#tapeout">Tapeout</a>{% endif %}
+<div style="margin-top:auto;padding:10px 16px;border-top:1px solid var(--border);">
+<button id="themeBtn" onclick="toggleTheme()" style="width:100%;padding:7px 10px;background:var(--card2);color:var(--muted);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:12px;transition:.2s;">Light mode</button>
+</div>
+</nav>
+<main>
+
+<!-- ===== 1. SUMMARY ===== -->
+<section id="summary">
+<h1>{{ design_name }}</h1>
+<p style="color:var(--muted);margin-bottom:14px;">{{ prd.get('title', design_name) }} — {{ prd.get('target_technology', {}).get('pdk', 'sky130') | upper }} {{ prd.get('target_technology', {}).get('process_nm', 130) }}nm</p>
+<div class="cards">
+<div class="card"><div class="label">Technology</div><div class="value">{{ prd.get('target_technology', {}).get('pdk', 'sky130') | upper }}</div></div>
+<div class="card"><div class="label">Process</div><div class="value">{{ prd.get('target_technology', {}).get('process_nm', 130) }} nm</div></div>
+<div class="card"><div class="label">Target Clock</div><div class="value">{{ target_clock_mhz }} MHz</div></div>
+<div class="card"><div class="label">Gate Budget</div><div class="value">{{ "{:,}".format(prd.get('area_budget', {}).get('max_gate_count') or 0) }}</div></div>
+<div class="card"><div class="label">Actual Gates</div><div class="value">{{ "{:,}".format(metrics.gate_count or 0) }}</div></div>
+<div class="card"><div class="label">Blocks</div><div class="value">{{ blocks | length }}</div></div>
+{% if metrics.design_area_um2 %}
+<div class="card"><div class="label">Die Area</div><div class="value">{{ "%.0f" | format(metrics.design_area_um2) }} µm²</div></div>
+{% endif %}
+{% if metrics.total_power_mw %}
+<div class="card"><div class="label">Total Power</div><div class="value">{{ "%.3f" | format(metrics.total_power_mw) }} mW</div></div>
+{% endif %}
+{% if metrics.wns_ns is not none %}
+<div class="card"><div class="label">Setup Slack</div><div class="value {{ 'pass' if metrics.wns_ns >= 0 else 'fail' }}">{{ "%+.2f" | format(metrics.wns_ns) }} ns</div></div>
+{% endif %}
+{% if metrics.drc_clean is not none %}
+<div class="card"><div class="label">DRC</div><div class="value {{ 'pass' if metrics.drc_clean else 'fail' }}">{{ 'Clean' if metrics.drc_clean else 'Violations' }}</div></div>
+{% endif %}
+{% if metrics.lvs_match is not none %}
+<div class="card"><div class="label">LVS</div><div class="value {{ 'pass' if metrics.lvs_match else 'fail' }}">{{ 'Match' if metrics.lvs_match else 'No Match' }}</div></div>
+{% endif %}
+</div>
+{% if timeline %}
+<h3>Pipeline Duration</h3>
+<div class="bar-track">
+{% for phase in timeline %}
+<div class="bar-seg" style="background:{{ phase.color }};flex:{{ phase.duration_s | int }}" title="{{ phase.name }}: {{ phase.duration_s | int }}s">{{ phase.label }}</div>
+{% endfor %}
+</div>
+{% endif %}
+</section>
+
+<!-- ===== 2. BLOCK DIAGRAM ===== -->
+<section id="blockdiagram">
+<h2>Block Diagram</h2>
+{% if mermaid_diagram %}
+<div class="mermaid-wrap">
+<pre class="mermaid">
+{{ mermaid_diagram }}
+</pre>
+</div>
+{% endif %}
+{% if block_diagram and block_diagram.blocks %}
+<table>
+<tr><th>Block</th><th>Tier</th><th>Est. Gates</th><th>Description</th></tr>
+{% for blk in block_diagram.blocks %}
+<tr>
+<td>{{ blk.name }}</td>
+<td>{{ blk.get('tier', 1) }}</td>
+<td>{{ "{:,}".format(blk.get('estimated_gates') or 0) }}</td>
+<td>{{ blk.get('description', '') }}</td>
+</tr>
+{% endfor %}
+</table>
+{% if block_diagram.connections %}
+<h3>Connections</h3>
+<table>
+<tr><th>From</th><th>To</th><th>Interface</th><th>Data Width</th></tr>
+{% for conn in block_diagram.connections %}
+<tr>
+<td>{{ conn.get('from', '') }}</td>
+<td>{{ conn.get('to', '') }}</td>
+<td>{{ conn.get('interface', '') }}</td>
+<td>{{ conn.get('data_width', '') }}</td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+{% elif not mermaid_diagram %}
+<p style="color:var(--muted)">No block diagram data available.</p>
+{% endif %}
+</section>
+
+<!-- ===== 3. ARCHITECTURE DOCUMENTS ===== -->
+<section id="documents">
+<h2>Architecture Documents</h2>
+<div class="doc-tabs" id="docTabs">
+{% for doc in arch_docs %}
+<button {% if loop.first %}class="active"{% endif %} onclick="showTab('doc', '{{ doc.id }}', this)">{{ doc.label }}</button>
+{% endfor %}
+</div>
+{% for doc in arch_docs %}
+<div id="{{ doc.id }}" class="doc-panel {% if loop.first %}active{% endif %}">
+<pre style="white-space:pre-wrap;word-wrap:break-word;">{{ doc.content }}</pre>
+</div>
+{% endfor %}
+</section>
+
+<!-- ===== 4. RTL SOURCE ===== -->
+<section id="rtl">
+<h2>RTL Source</h2>
+{% if rtl_files %}
+<div class="doc-tabs" id="rtlTabs">
+{% for rf in rtl_files %}
+<button {% if loop.first %}class="active"{% endif %} onclick="showTab('rtl', '{{ rf.id }}', this)">{{ rf.name }}</button>
+{% endfor %}
+</div>
+{% for rf in rtl_files %}
+<div id="{{ rf.id }}" class="doc-panel {% if loop.first %}active{% endif %}">
+<div class="code-viewer">{{ rf.content }}</div>
+</div>
+{% endfor %}
+{% else %}
+<p style="color:var(--muted)">No RTL files found.</p>
+{% endif %}
+</section>
+
+<!-- ===== 5. TESTBENCHES (grouped by block) ===== -->
+<section id="testbenches">
+<h2>Testbenches</h2>
+{% if tb_groups %}
+{% for group in tb_groups %}
+<details {% if loop.first %}open{% endif %}>
+<summary>
+<span>{{ group.block }}{% if group.block == 'integration' %} (chip-level){% endif %}</span>
+<span style="color:var(--muted);font-size:12px;">{{ group.files | length }} file{{ 's' if group.files | length != 1 }}</span>
+</summary>
+<div class="det-body">
+{% if group.files | length == 1 %}
+<div class="code-viewer">{{ group.files[0].content }}</div>
+{% else %}
+<div class="doc-tabs" id="tbTabs_{{ group.block }}">
+{% for tb in group.files %}
+<button {% if loop.first %}class="active"{% endif %} onclick="showTab('tb', '{{ tb.id }}', this)">{{ tb.name }}</button>
+{% endfor %}
+</div>
+{% for tb in group.files %}
+<div id="{{ tb.id }}" class="doc-panel {% if loop.first %}active{% endif %}">
+<div class="code-viewer">{{ tb.content }}</div>
+</div>
+{% endfor %}
+{% endif %}
+</div>
+</details>
+{% endfor %}
+{% elif tb_files %}
+<div class="doc-tabs" id="tbTabs">
+{% for tb in tb_files %}
+<button {% if loop.first %}class="active"{% endif %} onclick="showTab('tb', '{{ tb.id }}', this)">{{ tb.name }}</button>
+{% endfor %}
+</div>
+{% for tb in tb_files %}
+<div id="{{ tb.id }}" class="doc-panel {% if loop.first %}active{% endif %}">
+<div class="code-viewer">{{ tb.content }}</div>
+</div>
+{% endfor %}
+{% else %}
+<p style="color:var(--muted)">No testbench files found.</p>
+{% endif %}
+</section>
+
+<!-- ===== 6. VERIFICATION ===== -->
+<section id="vplan">
+<h2>Verification Results</h2>
+{% if test_results %}
+{% set total_pass = test_results | selectattr('passed') | list | length %}
+{% set total_tests = test_results | length %}
+<div style="margin-bottom:12px;">
+<span class="chip {{ 'chip-green' if total_pass == total_tests else 'chip-amber' if total_pass > 0 else 'chip-red' }}">
+{{ total_pass }} / {{ total_tests }} passed — {{ "%.0f" | format(total_pass / total_tests * 100 if total_tests else 0) }}%
+</span>
+</div>
+<table>
+<tr><th>Test</th><th>Block</th><th>Result</th></tr>
+{% for t in test_results %}
+<tr>
+<td><span class="dot {{ 'dot-pass' if t.passed else 'dot-fail' }}"></span>{{ t.name }}</td>
+<td>{{ t.get('block', '') }}</td>
+<td class="{{ 'pass' if t.passed else 'fail' }}">{{ 'PASS' if t.passed else 'FAIL' }}</td>
+</tr>
+{% endfor %}
+</table>
+{% else %}
+<p style="color:var(--muted)">No test results available.</p>
+{% endif %}
+</section>
+
+<!-- ===== 7. WAVEFORMS ===== -->
+<section id="waveform">
+<h2>Simulation Waveforms</h2>
+{% if vcd_waveforms %}
+{% for wf in vcd_waveforms %}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px;">
+<h3>{{ wf.block_name }}</h3>
+<div class="wavedrom-container">
+<script type="WaveDrom">{{ wf.wavedrom_json }}</script>
+</div>
+</div>
+{% endfor %}
+{% else %}
+<p style="color:var(--muted)">No VCD waveform data available.</p>
+{% endif %}
+</section>
+
+<!-- ===== 8. SYNTHESIS ===== -->
+<section id="synthesis">
+<h2>Synthesis</h2>
+
+{% if cell_dist and cell_dist.cells %}
+<h3>Cell Distribution</h3>
+<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;">
+<div class="chart-row">
+<div><canvas id="cellDonut" height="250"></canvas></div>
+<div><canvas id="cellBar" height="250"></canvas></div>
+</div>
+</div>
+<script>
+(function(){
+  const data = {{ cell_dist | tojson }};
+  const labels = data.cells.map(c=>c.name);
+  const counts = data.cells.map(c=>c.count);
+  const colors = ['#6366f1','#3b82f6','#06b6d4','#22c55e','#f59e0b','#ef4444','#a78bfa','#64748b'];
+  var cs = getComputedStyle(document.documentElement);
+  var mutedC = cs.getPropertyValue('--muted').trim() || '#94a3b8';
+  var borderC = cs.getPropertyValue('--border').trim() || '#2d3a4a';
+  var cardC = cs.getPropertyValue('--card').trim() || '#1a2332';
+  new Chart(document.getElementById('cellDonut'),{type:'doughnut',data:{labels,datasets:[{data:counts,backgroundColor:colors.slice(0,labels.length),borderColor:cardC,borderWidth:2}]},options:{responsive:true,plugins:{title:{display:true,text:'Cell Types ('+data.total+' total)',color:mutedC},legend:{position:'bottom',labels:{color:mutedC,font:{size:10}}}}}});
+  new Chart(document.getElementById('cellBar'),{type:'bar',data:{labels,datasets:[{label:'Count',data:counts,backgroundColor:colors.slice(0,labels.length)}]},options:{indexAxis:'y',responsive:true,plugins:{title:{display:true,text:'Cell Type Counts',color:mutedC},legend:{display:false}},scales:{x:{ticks:{color:mutedC},grid:{color:borderC}},y:{ticks:{color:mutedC},grid:{color:borderC}}}}});
+})();
+</script>
+{% else %}
+<p style="color:var(--muted)">No synthesis cell distribution data available.</p>
+{% endif %}
+
+{% if power_breakdown and power_breakdown.groups %}
+<h3>Power Breakdown</h3>
+<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;">
+<div class="cards" style="grid-template-columns:repeat(auto-fill,minmax(120px,1fr));">
+<div class="card"><div class="label">Total</div><div class="value">{{ "%.3f" | format(power_breakdown.total_mw) }} mW</div></div>
+<div class="card"><div class="label">Internal</div><div class="value">{{ "%.3f" | format(power_breakdown.internal_mw) }} mW</div></div>
+<div class="card"><div class="label">Switching</div><div class="value">{{ "%.3f" | format(power_breakdown.switching_mw) }} mW</div></div>
+<div class="card"><div class="label">Leakage</div><div class="value">{{ "%.4f" | format(power_breakdown.leakage_mw) }} mW</div></div>
+</div>
+<div style="margin-top:12px;"><canvas id="powerChart" height="200"></canvas></div>
+</div>
+<script>
+(function(){
+  const groups = {{ power_breakdown.groups | tojson }};
+  const labels = groups.map(g=>g.name);
+  var cs = getComputedStyle(document.documentElement);
+  var mutedC = cs.getPropertyValue('--muted').trim() || '#94a3b8';
+  var borderC = cs.getPropertyValue('--border').trim() || '#2d3a4a';
+  new Chart(document.getElementById('powerChart'),{type:'bar',data:{labels,datasets:[
+    {label:'Internal',data:groups.map(g=>g.internal_mw),backgroundColor:'#6366f1'},
+    {label:'Switching',data:groups.map(g=>g.switching_mw),backgroundColor:'#3b82f6'},
+    {label:'Leakage',data:groups.map(g=>g.leakage_mw),backgroundColor:'#22c55e'}
+  ]},options:{responsive:true,plugins:{title:{display:true,text:'Power by Group (mW)',color:mutedC},legend:{labels:{color:mutedC,font:{size:10}}}},scales:{x:{stacked:true,ticks:{color:mutedC},grid:{color:borderC}},y:{stacked:true,ticks:{color:mutedC},grid:{color:borderC}}}}});
+})();
+</script>
+{% endif %}
+</section>
+
+<!-- ===== 9. CRITICAL PATH ===== -->
+<section id="critpath">
+<h2>Critical Path</h2>
+{% if critical_path and critical_path.cells %}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;">
+<p style="font-size:13px;margin-bottom:8px;">
+<strong>Total path delay:</strong> {{ "%.2f" | format(critical_path.total_delay_ns) }} ns |
+<strong>Slack:</strong> <span class="{{ 'pass' if critical_path.slack_ns >= 0 else 'fail' }}">{{ "%+.2f" | format(critical_path.slack_ns) }} ns</span>
+{% if critical_path.startpoint %} | <strong>Start:</strong> {{ critical_path.startpoint }}{% endif %}
+{% if critical_path.endpoint %} | <strong>End:</strong> {{ critical_path.endpoint }}{% endif %}
+</p>
+<div id="critPathContainer" style="overflow-x:auto;padding:10px 0;"></div>
+</div>
+<script>
+(function(){
+  const cells = {{ critical_path.cells | tojson }};
+  const container = document.getElementById('critPathContainer');
+  const maxD = Math.max(...cells.map(c=>c.delay));
+  let html = '<div style="display:flex;align-items:center;gap:2px;flex-wrap:nowrap;">';
+  cells.forEach((c,i) => {
+    const w = Math.max(50, c.delay / maxD * 180);
+    const hue = c.delay <= 0.2 ? 140 : c.delay < 1 ? 60 : 0;
+    const sat = Math.min(80, c.delay / maxD * 100);
+    html += '<div style="min-width:'+w+'px;background:hsl('+hue+','+sat+'%,25%);border:1px solid hsl('+hue+','+sat+'%,45%);border-radius:6px;padding:4px 6px;text-align:center;font-size:10px;">';
+    html += '<div style="color:var(--text);font-weight:600;">'+c.type+'</div>';
+    html += '<div style="color:var(--muted);">'+(c.delay > 0 ? c.delay.toFixed(2)+'ns' : '—')+'</div>';
+    html += '</div>';
+    if(i < cells.length-1) html += '<div style="color:var(--muted);">→</div>';
+  });
+  html += '</div>';
+  container.innerHTML = html;
+})();
+</script>
+{% else %}
+<p style="color:var(--muted)">No timing data available.</p>
+{% endif %}
+</section>
+
+<!-- ===== 10. LAYOUT / GDS ===== -->
+<section id="layout">
+<h2>Layout / GDS</h2>
+<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;">
+{% if gds_viewer == '3d' %}
+<div style="text-align:center;margin-bottom:12px;">
+<iframe src="3d.html" style="width:100%;height:500px;border:1px solid var(--border);border-radius:6px;" loading="lazy"></iframe>
+</div>
+<div style="text-align:center;">
+<a href="3d.html" class="btn" target="_blank">Open 3D Viewer Full Screen</a>
+</div>
+{% elif gds_viewer == 'png' %}
+<div style="text-align:center;">
+<img src="{{ gds_png_path }}" alt="GDS Layout" style="max-width:100%;border-radius:6px;border:1px solid var(--border);">
+</div>
+{% elif def_data and def_data.die_area %}
+<svg width="100%" viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg" style="max-width:500px;margin:0 auto;display:block;">
+<rect x="5" y="5" width="490" height="490" rx="4" fill="none" stroke="#3b82f6" stroke-width="2"/>
+<text x="250" y="25" text-anchor="middle" fill="#94a3b8" font-size="11" font-family="monospace">{{ def_data.die_width_um }} × {{ def_data.die_height_um }} µm</text>
+<rect x="50" y="50" width="400" height="400" rx="4" fill="none" stroke="#22c55e" stroke-width="1" stroke-dasharray="5,3"/>
+<text x="250" y="260" text-anchor="middle" fill="#22c55e" font-size="10" font-family="monospace">Active placement region</text>
+<text x="250" y="275" text-anchor="middle" fill="#64748b" font-size="9" font-family="monospace">{{ def_data.component_count }} components</text>
+</svg>
+{% else %}
+<p style="color:var(--muted)">No layout data available.</p>
+{% endif %}
+</div>
+</section>
+
+<!-- ===== 11. TAPEOUT ===== -->
+{% if tapeout.has_tapeout %}
+<section id="tapeout">
+<h2>Tapeout — OpenFrame MPW Submission</h2>
+<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;">
+<div style="text-align:center;margin-bottom:16px;">
+{% if tapeout.precheck_pass %}
+<span class="chip chip-green" style="font-size:16px;padding:6px 20px;">READY FOR TAPEOUT</span>
+{% else %}
+<span class="chip chip-red" style="font-size:16px;padding:6px 20px;">NOT READY — Issues Found</span>
+{% endif %}
+</div>
+<div class="cards">
+<div class="card"><div class="label">Wrapper DRC</div><div class="value {{ 'pass' if tapeout.wrapper_drc_clean else 'fail' }}">{{ 'Clean' if tapeout.wrapper_drc_clean else 'Failed' }}</div></div>
+<div class="card"><div class="label">Wrapper LVS</div><div class="value {{ 'pass' if tapeout.wrapper_lvs_match else 'fail' }}">{{ 'Match' if tapeout.wrapper_lvs_match else 'No Match' }}</div></div>
+<div class="card"><div class="label">Block DRC</div><div class="value {{ 'pass' if metrics.drc_clean else 'fail' }}">{{ 'Clean' if metrics.drc_clean else 'Violations' }}</div></div>
+<div class="card"><div class="label">Precheck</div><div class="value {{ 'pass' if tapeout.precheck_pass else 'fail' }}">{{ 'Pass' if tapeout.precheck_pass else 'Failed' }}</div></div>
+</div>
+{% if tapeout.submission_files %}
+<h3>Submission Files</h3>
+<table>
+<tr><th>Path</th><th>Status</th></tr>
+{% for sf in tapeout.submission_files %}
+<tr><td>{{ sf.path }}</td><td class="{{ 'pass' if sf.present else 'fail' }}">{{ 'Present' if sf.present else 'Missing' }}</td></tr>
+{% endfor %}
+</table>
+{% endif %}
+</div>
+</section>
+{% endif %}
+
+<!-- ===== FOOTER ===== -->
+<footer style="text-align:center;padding:24px;color:var(--muted);font-size:12px;border-top:1px solid var(--border);margin-top:24px;">
+<p>Generated by <strong>SoCMate ASIC Design Pipeline</strong> | <span id="timestamp"></span></p>
+</footer>
+
+</main>
+
+<script>
+// Sidebar active highlight
+const sections = document.querySelectorAll('section');
+const navLinks = document.querySelectorAll('nav a');
+window.addEventListener('scroll', () => {
+  let current = '';
+  sections.forEach(s => { if (window.scrollY >= s.offsetTop - 100) current = s.id; });
+  navLinks.forEach(a => { a.classList.toggle('active', a.getAttribute('href') === '#' + current); });
+});
+
+// Mermaid — match current theme
+var _isLight = document.documentElement.getAttribute('data-theme') === 'light';
+mermaid.initialize({ startOnLoad: true, theme: _isLight ? 'default' : 'dark' });
+
+// Tab switching (shared by RTL, TB, and Document tabs)
+function showTab(group, id, btn) {
+  const container = btn.closest('section') || btn.closest('.det-body') || document;
+  container.querySelectorAll('.doc-panel').forEach(p => p.classList.remove('active'));
+  container.querySelectorAll('.doc-tabs button').forEach(b => { b.classList.remove('active'); b.style.animation = 'none'; });
+  var panel = document.getElementById(id);
+  if (panel) panel.classList.add('active');
+  btn.classList.add('active');
+  btn.style.animation = '';
+  void btn.offsetHeight;
+}
+
+// Theme toggle
+function toggleTheme() {
+  var html = document.documentElement;
+  var next = html.getAttribute('data-theme') === 'light' ? '' : 'light';
+  if (next) html.setAttribute('data-theme', 'light');
+  else html.removeAttribute('data-theme');
+  localStorage.setItem('socmate-theme', next || 'dark');
+  _updateThemeBtn();
+}
+function _updateThemeBtn() {
+  var btn = document.getElementById('themeBtn');
+  if (btn) btn.textContent = document.documentElement.getAttribute('data-theme') === 'light' ? 'Dark mode' : 'Light mode';
+}
+_updateThemeBtn();
+
+// Timestamp
+document.getElementById('timestamp').textContent = new Date().toISOString();
+</script>
+<script>if(typeof WaveDrom!=='undefined')WaveDrom.ProcessAll();</script>
+</body>
+</html>

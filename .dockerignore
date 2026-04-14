@@ -1,0 +1,44 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+# Don't ship the developer venv into the image.
+venv/
+.venv/
+orchestrator/.venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+
+# PDK is downloaded inside the image at build time.
+.pdk/
+
+# Pipeline-generated artifacts -- regenerated per run.
+.socmate/
+rtl/
+tb/
+syn/
+sim_build/
+pnr/
+arch/
+verification/
+chip_finish/
+archive/
+
+# Local config / secrets
+.env
+.mcp.json
+
+# IDE / OS noise
+.git/
+.github/
+.vscode/
+.idea/
+.cursor/
+.claude/
+.DS_Store
+Thumbs.db
+node_modules/

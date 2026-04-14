@@ -1,0 +1,65 @@
+{
+    "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
+    "name": "socmate",
+
+    // Reuse the production Dockerfile so Codespaces and `docker build` stay
+    // bit-identical. First build is ~15-20 min (Sky130 PDK download
+    // dominates); rebuilds are seconds.
+    "build": {
+        "dockerfile": "../Dockerfile",
+        "context": ".."
+    },
+
+    // The openlane2 base image already runs as root with /nix/store on
+    // PATH; keep the dev container as root so the entrypoint can write
+    // under /socmate/.socmate, /rtl, etc.
+    "remoteUser": "root",
+    "containerUser": "root",
+
+    "workspaceFolder": "/socmate",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/socmate,type=bind,consistency=cached",
+
+    "containerEnv": {
+        "SOCMATE_PROJECT_ROOT": "/socmate",
+        "PDK_ROOT": "/socmate/.pdk",
+        "PYTHONUNBUFFERED": "1"
+    },
+
+    // Forward the MCP server HTTP port for users running `make mcp` over HTTP.
+    "forwardPorts": [8765],
+    "portsAttributes": {
+        "8765": {
+            "label": "socmate MCP HTTP",
+            "onAutoForward": "silent"
+        }
+    },
+
+    // Run preflight on attach so users know immediately whether the
+    // toolchain came up correctly. This does NOT call the LLM; it just
+    // checks that the PDK and EDA binaries exist on $PATH.
+    "postAttachCommand": "make preflight || true",
+
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "charliermarsh.ruff",
+                "mshr-h.veriloghdl",
+                "anthropic.claude-code"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/opt/socmate-venv/bin/python",
+                "python.terminal.activateEnvironment": false
+            }
+        }
+    },
+
+    // Authentication is via env var. In Codespaces, set CLAUDE_CODE_OAUTH_TOKEN
+    // (or ANTHROPIC_API_KEY) as a Codespaces secret on your fork --
+    // see docs/AUTHENTICATION.md.
+    "remoteEnv": {
+        "CLAUDE_CODE_OAUTH_TOKEN": "${localEnv:CLAUDE_CODE_OAUTH_TOKEN}",
+        "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}"
+    }
+}
