@@ -20,7 +20,7 @@ from typing import Any
 
 from opentelemetry import trace
 
-from .cursor_llm import ClaudeLLM
+from .cursor_llm import DEFAULT_MODEL, ClaudeLLM
 
 _tracer = trace.get_tracer(__name__)
 
@@ -62,7 +62,7 @@ def _parse_issue_counts(summary: str) -> tuple[int, int]:
 class IntegrationReviewAgent:
     """Reviews all uArch specs for cross-block interface coherence."""
 
-    def __init__(self, model: str = "opus-4.6", temperature: float = 0.1):
+    def __init__(self, model: str = DEFAULT_MODEL, temperature: float = 0.1):
         self.llm = ClaudeLLM(model=model, timeout=900)
 
     async def review(

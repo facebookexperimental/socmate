@@ -304,7 +304,7 @@ async def generate_uarch_spec(
     else:
         python_source = ""
 
-    agent = UarchSpecGenerator(model="opus-4.6", temperature=0.2)
+    agent = UarchSpecGenerator(model=DEFAULT_MODEL, temperature=0.2)
     result = await agent.generate(
         block_name=block["name"],
         python_source=python_source,
@@ -345,7 +345,7 @@ async def generate_rtl(
     rtl_path = PROJECT_ROOT / block["rtl_target"]
     rtl_path.parent.mkdir(parents=True, exist_ok=True)
 
-    agent = RTLGeneratorAgent(model="opus-4.6", temperature=0.1)
+    agent = RTLGeneratorAgent(model=DEFAULT_MODEL, temperature=0.1)
     try:
         result = await agent.generate(
             block_name=block["name"],
@@ -412,7 +412,7 @@ async def generate_testbench(
     tb_path = str(PROJECT_ROOT / block["testbench"])
     Path(tb_path).parent.mkdir(parents=True, exist_ok=True)
 
-    agent = TestbenchGeneratorAgent(model="opus-4.6", temperature=0.1)
+    agent = TestbenchGeneratorAgent(model=DEFAULT_MODEL, temperature=0.1)
     result = await agent.generate(
         block_name=block["name"],
         rtl_path=rtl_path,
@@ -672,7 +672,7 @@ async def fix_lint_errors(
     the Edit tool to fix in-place.  Returns True if the agent modified
     the file, None if it couldn't fix.
     """
-    from orchestrator.langchain.agents.cursor_llm import ClaudeLLM
+    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
 
     prompt_file = Path(__file__).resolve().parent.parent / "langchain" / "prompts" / "lint_fixer.md"
     if prompt_file.exists():
@@ -694,7 +694,7 @@ async def fix_lint_errors(
     )
 
     block_title = block_name.replace("_", " ").title()
-    llm = ClaudeLLM(model="opus-4.6", timeout=300)
+    llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=300)
 
     try:
         await llm.call(
@@ -723,7 +723,7 @@ async def fix_synth_errors(
     the Edit tool to fix in-place.  Returns True if the agent modified
     the file, None if it couldn't fix.
     """
-    from orchestrator.langchain.agents.cursor_llm import ClaudeLLM
+    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
 
     prompt_file = Path(__file__).resolve().parent.parent / "langchain" / "prompts" / "synth_fixer.md"
     if prompt_file.exists():
@@ -745,7 +745,7 @@ async def fix_synth_errors(
     )
 
     block_title = block_name.replace("_", " ").title()
-    llm = ClaudeLLM(model="opus-4.6", timeout=300)
+    llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=300)
 
     try:
         await llm.call(
@@ -774,7 +774,7 @@ async def fix_testbench_errors(
     and DV rules from disk, uses the Edit tool to fix in-place.
     Returns True if the agent modified the file, None if it couldn't fix.
     """
-    from orchestrator.langchain.agents.cursor_llm import ClaudeLLM
+    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
 
     system_prompt = (
         "You are an expert verification engineer. A cocotb testbench is "
@@ -806,7 +806,7 @@ async def fix_testbench_errors(
     )
 
     block_title = block_name.replace("_", " ").title()
-    llm = ClaudeLLM(model="opus-4.6", timeout=300)
+    llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=300)
 
     try:
         await llm.call(
@@ -833,7 +833,7 @@ async def diagnose_failure(
     """Run DebugAgent to analyze failure -- disk-first, agent reads all files."""
     from orchestrator.langchain.agents.debug_agent import DebugAgent
 
-    agent = DebugAgent(model="opus-4.6", temperature=0.1)
+    agent = DebugAgent(model=DEFAULT_MODEL, temperature=0.1)
     return await agent.analyze(
         block_name=block_name,
         phase=phase,

@@ -292,9 +292,9 @@ async def analyze_block_diagram(
         )
 
         # Import here to avoid circular deps and allow mocking in tests
-        from orchestrator.langchain.agents.cursor_llm import ClaudeLLM
+        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
 
-        llm = ClaudeLLM(model="opus-4.6", timeout=1200)
+        llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=1200)
 
         target_path = Path.cwd() / ".socmate" / "block_diagram.json"
 

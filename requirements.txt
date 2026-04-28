@@ -7,10 +7,11 @@ pytest-cov>=4.0.0
 pytest-asyncio>=0.23.0
 
 # Orchestrator -- LangGraph pipeline
+# (LangChain itself is not used; agents shell out to the Claude CLI via
+# orchestrator/langchain/agents/cursor_llm.py. langgraph pulls in
+# langchain-core transitively.)
 langgraph>=0.4.0
 langgraph-checkpoint-sqlite>=2.0.0
-langchain-core>=0.3.0
-langchain-anthropic>=0.3.0
 
 # Orchestrator -- telemetry
 opentelemetry-sdk>=1.20.0

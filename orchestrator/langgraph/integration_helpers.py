@@ -850,7 +850,7 @@ async def generate_integration_testbench(
     tb_dir.mkdir(parents=True, exist_ok=True)
     output_path = str(tb_dir / f"test_{design_name}.py")
 
-    agent = IntegrationTestbenchGenerator(model="opus-4.6", temperature=0.1)
+    agent = IntegrationTestbenchGenerator(model=DEFAULT_MODEL, temperature=0.1)
     result = await agent.generate(
         design_name=design_name,
         top_rtl_source=top_rtl_source,

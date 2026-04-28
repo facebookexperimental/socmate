@@ -142,9 +142,9 @@ async def analyze_memory_map(
 
         user_message = "\n".join(parts)
 
-        from orchestrator.langchain.agents.cursor_llm import ClaudeLLM
+        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
 
-        llm = ClaudeLLM(model="opus-4.6", timeout=1200)
+        llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=1200)
         system_prompt = SYSTEM_PROMPT.format(topology_context=topology_context)
 
         target_path = _P(project_root) / ".socmate" / "memory_map.json"

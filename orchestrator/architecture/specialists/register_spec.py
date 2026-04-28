@@ -88,9 +88,9 @@ async def analyze_register_spec(
 
         user_message = "\n".join(parts)
 
-        from orchestrator.langchain.agents.cursor_llm import ClaudeLLM
+        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
 
-        llm = ClaudeLLM(model="opus-4.6", timeout=1200)
+        llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=1200)
 
         target_path = _P(project_root) / ".socmate" / "register_spec.json" if project_root else _P.cwd() / ".socmate" / "register_spec.json"
 

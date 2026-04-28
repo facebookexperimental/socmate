@@ -256,9 +256,25 @@ _CLI_MODEL_MAP = {
     "haiku-3.5": "claude-3-5-haiku-20241022",
 }
 
+# Default model used by every agent unless overridden. Set the SOCMATE_MODEL
+# environment variable (to either a short name above or a full Claude CLI
+# model ID) to override at runtime without code changes -- useful when the
+# default version is unavailable on a fresh CLI install.
+DEFAULT_MODEL = "opus-4.6"
+
 
 def _resolve_model(model: str) -> str:
-    """Map short model name to Claude CLI model ID."""
+    """Map short model name to Claude CLI model ID.
+
+    Honours the ``SOCMATE_MODEL`` environment variable as a runtime
+    override: if set, it wins over whatever the caller passed in. Empty
+    or unset model strings fall back to ``DEFAULT_MODEL``.
+    """
+    env_override = os.environ.get("SOCMATE_MODEL", "").strip()
+    if env_override:
+        model = env_override
+    elif not model:
+        model = DEFAULT_MODEL
     return _CLI_MODEL_MAP.get(model, model)
 
 
@@ -322,19 +338,22 @@ class ClaudeLLM:
 
     Usage::
 
-        llm = ClaudeLLM(model="opus-4.6", timeout=180)
+        llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=180)
         text = await llm.call(system="You are ...", prompt="Generate ...")
+
+    The ``model`` argument may be left empty to fall back to ``DEFAULT_MODEL``,
+    and the ``SOCMATE_MODEL`` env var overrides both at call time.
     """
 
     def __init__(
         self,
-        model: str = "opus-4.6",
+        model: str = DEFAULT_MODEL,
         claude_path: str = "",
         timeout: int = 1200,
         max_turns: int = 50,
         disable_tools: bool = False,
     ) -> None:
-        self.model = model
+        self.model = model or DEFAULT_MODEL
         self.claude_path = claude_path
         self.timeout = timeout
         self.max_turns = max_turns

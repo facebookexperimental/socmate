@@ -270,11 +270,17 @@ class TestTestbenchReusePrompt:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestRtlGeneratorModel:
-    def test_uses_opus(self):
-        import inspect
-        from orchestrator.langgraph.pipeline_helpers import generate_rtl
-        source = inspect.getsource(generate_rtl)
-        assert 'model="opus-4.6"' in source
+    def test_uses_default_model(self):
+        """RTL generation should construct the agent with the project default
+        model. We assert this at the value level (DEFAULT_MODEL == 'opus-4.6')
+        rather than via source-string matching, so the symbolic refactor in
+        pipeline_helpers (model=DEFAULT_MODEL instead of a literal) does not
+        regress the contract.
+        """
+        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
+        from orchestrator.langchain.agents.rtl_generator import RTLGeneratorAgent
+        agent = RTLGeneratorAgent()
+        assert agent.llm.model == DEFAULT_MODEL == "opus-4.6"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

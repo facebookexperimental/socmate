@@ -1741,7 +1741,7 @@ async def integration_review_node(state: OrchestratorState) -> dict:
         from orchestrator.langchain.agents.integration_review_agent import (
             IntegrationReviewAgent,
         )
-        agent = IntegrationReviewAgent(model="opus-4.6", temperature=0.1)
+        agent = IntegrationReviewAgent(model=DEFAULT_MODEL, temperature=0.1)
         result = await agent.review(
             block_names=block_names,
             project_root=pr,

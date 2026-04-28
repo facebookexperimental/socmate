@@ -43,25 +43,69 @@ volare enable --pdk sky130 --pdk-root .pdk
 
 ## Quick Start
 
+### Option A -- Docker / RunPod (recommended for first-time users)
+
+The repo ships a `Dockerfile` that bundles the full EDA toolchain
+(Yosys, OpenROAD, Magic, netgen, KLayout, Sky130 PDK, Verilator,
+cocotb) plus the orchestrator and the Claude CLI. No Nix or local
+EDA install needed.
+
 ```bash
-# Clone
+git clone https://github.com/facebookresearch/socmate.git
+cd socmate
+docker build -t socmate:latest .
+
+docker run --rm -it \
+    -e ANTHROPIC_API_KEY=sk-ant-... \
+    -e SOCMATE_MODE=shell \
+    -v "$(pwd)/.socmate:/socmate/.socmate" \
+    socmate:latest
+# inside the container:
+make pipeline
+```
+
+For a hosted run, see [docs/RUNPOD.md](docs/RUNPOD.md) for a
+ready-to-paste pod template.
+
+### Option B -- Local install (Nix-based backend)
+
+```bash
 git clone https://github.com/facebookresearch/socmate.git
 cd socmate
 
-# Python environment
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 pip install -e orchestrator/
 
-# Set your API key
-cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY
+cp .env.example .env  # then edit and add ANTHROPIC_API_KEY
+
+# Optional: pin a non-default model without code edits
+# export SOCMATE_MODEL=opus-4.5
 
 # Start the MCP server (for interactive use with Claude Code)
 make mcp
 
 # Or run the pipeline headlessly
+make pipeline
+```
+
+The local path uses `nix shell "nixpkgs#openroad"` etc. for the backend
+EDA tools (see `scripts/*-nix.sh`), so Nix with flakes enabled must be
+on `$PATH` for any post-synthesis step. The container image avoids
+this entirely.
+
+If you have Nix with flakes already enabled, the cleanest local setup
+is `nix develop` -- the repo's `flake.nix` pins every EDA tool plus
+Verilator and Node/Claude CLI to a single nixpkgs commit, drops them
+on `$PATH`, and bypasses the per-call `nix shell` re-entry through the
+`SOCMATE_BACKEND_*` env vars:
+
+```bash
+nix develop
+# then, inside the dev shell:
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt && pip install -e orchestrator/
 make pipeline
 ```
 

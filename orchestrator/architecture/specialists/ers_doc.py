@@ -108,9 +108,9 @@ async def generate_ers_doc(
             "After writing, respond with only the file path confirmation."
         )
 
-        from orchestrator.langchain.agents.cursor_llm import ClaudeLLM
+        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
 
-        llm = ClaudeLLM(model="opus-4.6", timeout=1200)
+        llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=1200)
 
         target_path = Path.cwd() / ".socmate" / "ers_spec.json"
 

@@ -370,9 +370,9 @@ async def check_constraints(
 
         user_message = "\n".join(parts)
 
-        from orchestrator.langchain.agents.cursor_llm import ClaudeLLM
+        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
 
-        llm = ClaudeLLM(model="opus-4.6", timeout=600)
+        llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=600)
 
         # Fill template variables in system prompt
         system_prompt = SYSTEM_PROMPT.format(

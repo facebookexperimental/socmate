@@ -79,9 +79,9 @@ async def diagnose_tapeout_failure(
             "Return ONLY the JSON object."
         )
 
-        from orchestrator.langchain.agents.cursor_llm import ClaudeLLM
+        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
 
-        llm = ClaudeLLM(model="opus-4.6", timeout=120)
+        llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=120)
 
         try:
             content = await llm.call(

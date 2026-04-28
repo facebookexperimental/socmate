@@ -19,6 +19,8 @@ import json
 import logging
 from pathlib import Path
 
+from .cursor_llm import DEFAULT_MODEL
+
 logger = logging.getLogger(__name__)
 
 _PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
@@ -60,7 +62,7 @@ class BackendEDAAgent:
     def __init__(
         self,
         step: str,
-        model: str = "opus-4.6",
+        model: str = DEFAULT_MODEL,
         timeout: int = 180,
     ) -> None:
         self.step = step

@@ -24,6 +24,7 @@ import pytest
 
 from orchestrator.langchain.agents.cursor_llm import (
     ClaudeLLM,
+    DEFAULT_MODEL,
     _CLI_MODEL_MAP,
     _detect_provider,
     _resolve_model,
@@ -55,6 +56,25 @@ class TestModelNameMapping:
         expected_shorts = ["claude-sonnet-4-6", "sonnet-4.5", "sonnet-4", "opus-4.5", "opus-4.6", "haiku-3.5"]
         for short in expected_shorts:
             assert short in _CLI_MODEL_MAP, f"Missing CLI mapping: {short}"
+
+    def test_default_model_constant(self):
+        assert DEFAULT_MODEL in _CLI_MODEL_MAP
+
+    def test_empty_model_falls_back_to_default(self, monkeypatch):
+        monkeypatch.delenv("SOCMATE_MODEL", raising=False)
+        assert _resolve_model("") == _CLI_MODEL_MAP[DEFAULT_MODEL]
+
+    def test_socmate_model_env_overrides_passed_value(self, monkeypatch):
+        monkeypatch.setenv("SOCMATE_MODEL", "haiku-3.5")
+        assert _resolve_model("opus-4.6") == "claude-3-5-haiku-20241022"
+
+    def test_socmate_model_env_with_full_id_passes_through(self, monkeypatch):
+        monkeypatch.setenv("SOCMATE_MODEL", "claude-some-future-model-99")
+        assert _resolve_model("opus-4.6") == "claude-some-future-model-99"
+
+    def test_empty_socmate_model_does_not_override(self, monkeypatch):
+        monkeypatch.setenv("SOCMATE_MODEL", "")
+        assert _resolve_model("opus-4.6") == "claude-opus-4-6-20250610"
 
 
 class TestProviderDetection:

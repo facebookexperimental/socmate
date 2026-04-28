@@ -166,7 +166,7 @@ async def _run_tapeout_llm_step(
     timeout: int = 900,
 ) -> dict:
     """Run an LLM-driven EDA step for the tapeout pipeline."""
-    from orchestrator.langchain.agents.cursor_llm import ClaudeLLM
+    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
 
     prompt_path = _PROMPT_DIR / prompt_file
     system_prompt = prompt_path.read_text().format(**context)
@@ -176,7 +176,7 @@ async def _run_tapeout_llm_step(
         "After writing the result file, respond with a brief summary."
     )
 
-    llm = ClaudeLLM(model="opus-4.6", timeout=timeout)
+    llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=timeout)
     try:
         await llm.call(
             system=system_prompt,

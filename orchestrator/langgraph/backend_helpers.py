@@ -65,7 +65,24 @@ RCX_RULES = _PDK_PATH / "libs.tech" / "rcx" / "sky130hd_rcx_patterns.rules"
 
 
 def _resolve_tool(config_key: str, default_script: str) -> str:
-    """Resolve a tool binary path from config or default."""
+    """Resolve an EDA tool binary path.
+
+    Resolution order (first match wins):
+
+    1. ``SOCMATE_BACKEND_<NAME>`` env var (e.g. ``SOCMATE_BACKEND_OPENROAD``)
+       -- used by the ``nix develop`` shellHook and the Docker image to
+       point at the bare binary on ``$PATH`` and skip the per-call
+       ``nix shell`` re-entry.
+    2. ``backend.<config_key>`` in ``orchestrator/config.yaml`` -- the
+       checked-in default points at ``scripts/*-nix.sh`` wrappers.
+    3. ``default_script`` relative to the project root.
+    4. ``default_script`` as-is (lets the OS resolve it via ``$PATH``).
+    """
+    env_key = "SOCMATE_BACKEND_" + config_key.removesuffix("_binary").upper()
+    env_val = os.environ.get(env_key, "").strip()
+    if env_val:
+        return env_val
+
     try:
         cfg = load_config()
         backend = cfg.get("backend", {})
