@@ -1,3 +1,7 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
 """
 IntegrationTestbenchGenerator -- Generates cocotb testbenches for the
 chip-level integration module that wires all blocks together.
