@@ -149,7 +149,7 @@ class TestCommandConstruction:
         model = ClaudeLLM(model="opus-4.6", timeout=10)
 
         with patch.object(model, "_run_cli_with_watchdog") as mock_watchdog:
-            mock_watchdog.return_value = ("test output", "", 0, 1.0, False, False)
+            mock_watchdog.return_value = ("test output", "", 0, 1.0, False, False, {})
             model._generate_via_cli("system prompt", "hello")
 
             call_args = mock_watchdog.call_args
@@ -165,13 +165,16 @@ class TestCommandConstruction:
         model = ClaudeLLM(model="opus-4.6", timeout=10)
 
         with patch.object(model, "_run_cli_with_watchdog") as mock_watchdog:
-            mock_watchdog.return_value = ("test output", "", 0, 1.0, False, False)
+            mock_watchdog.return_value = ("test output", "", 0, 1.0, False, False, {})
             model._generate_via_cli("system prompt", "hello")
 
             cmd = mock_watchdog.call_args[0][0]
             assert "-p" in cmd
             assert "--output-format" in cmd
-            assert "text" in cmd
+            # stream-json gives us per-call usage + cost via the `result` event
+            assert "stream-json" in cmd
+            # CLI requires --verbose alongside stream-json under --print
+            assert "--verbose" in cmd
 
 
 class TestWatchdogBehaviour:
@@ -199,10 +202,12 @@ class TestWatchdogBehaviour:
         cmd = ["/bin/sleep", "600"]
         t0 = time.monotonic()
 
-        stdout, stderr, rc, elapsed, timed_out, stalled = (
+        stdout, stderr, rc, elapsed, timed_out, stalled, usage = (
             model._run_cli_with_watchdog(cmd, "", "/tmp", "test", t0)
         )
 
         assert stalled is True
         assert timed_out is False
         assert elapsed < 30  # should be killed well before timeout
+        # No `result` event in a stalled stream → usage dict is empty.
+        assert usage == {}

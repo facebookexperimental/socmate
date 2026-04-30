@@ -33,6 +33,14 @@ Key design decisions:
 Tier N+1 does not start until every block in tier N completes.  Interrupts
 in any block pause the entire graph (natural LangGraph behaviour).
 
+Within a tier, blocks run in parallel: ``fan_out_tier`` emits one
+``Send("process_block", ...)`` per block and LangGraph schedules every
+async branch concurrently via ``asyncio.gather``.  Each per-block
+``ClaudeLLM.call`` then dispatches the blocking CLI subprocess into the
+default thread executor (``loop.run_in_executor`` in ``call``), so two
+concurrent blocks do not serialise on the GIL or on a single Popen --
+verified empirically: 3 parallel CLI calls finish in 1× wall-time.
+
 Usage::
 
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver

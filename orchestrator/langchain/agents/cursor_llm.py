@@ -176,6 +176,7 @@ def _log_llm_call(
     timeout: int,
     error: str = "",
     timed_out: bool = False,
+    usage: dict | None = None,
 ) -> None:
     """Write an LLM call record to the JSONL log and an OTel span.
 
@@ -184,6 +185,7 @@ def _log_llm_call(
     truncated to ~32K chars to stay within exporter limits.
     """
     ts = _time_mod.time()
+    usage = usage or {}
     record = {
         "ts": ts,
         "iso": _time_mod.strftime("%Y-%m-%dT%H:%M:%S", _time_mod.localtime(ts)),
@@ -199,6 +201,7 @@ def _log_llm_call(
         "system_prompt": system_prompt,
         "user_prompt": user_prompt,
         "response": response,
+        "usage": usage,
     }
 
     # Write JSONL (full, untruncated)
@@ -219,22 +222,36 @@ def _log_llm_call(
     if tracer is not None:
         try:
             from opentelemetry import trace
+            attrs = {
+                "llm.model_name": model,
+                "llm.provider": provider,
+                "llm.timeout_s": timeout,
+                "llm.duration_s": round(duration_s, 2),
+                "llm.timed_out": timed_out,
+                "llm.system_prompt_len": len(system_prompt),
+                "llm.user_prompt_len": len(user_prompt),
+                "llm.response_len": len(response),
+                "input.value": (system_prompt + "\n---\n" + user_prompt)[:_TRUNCATE_ATTR],
+                "input.mime_type": "text/plain",
+                "output.value": response[:_TRUNCATE_ATTR],
+                "output.mime_type": "text/plain",
+            }
+            # Real token / cost telemetry from CLI stream-json `result` event.
+            # `input_tokens` here excludes cached input -- add cache_read for
+            # an apples-to-apples "tokens delivered to model" sum.
+            for k_src, k_dst in (
+                ("input_tokens", "llm.input_tokens"),
+                ("output_tokens", "llm.output_tokens"),
+                ("cache_read_input_tokens", "llm.cache_read_tokens"),
+                ("cache_creation_input_tokens", "llm.cache_creation_tokens"),
+                ("total_cost_usd", "llm.cost_usd"),
+                ("num_turns", "llm.num_turns"),
+            ):
+                if k_src in usage and usage[k_src] is not None:
+                    attrs[k_dst] = usage[k_src]
             span = tracer.start_span(
                 f"LLM {model} ({provider})",
-                attributes={
-                    "llm.model_name": model,
-                    "llm.provider": provider,
-                    "llm.timeout_s": timeout,
-                    "llm.duration_s": round(duration_s, 2),
-                    "llm.timed_out": timed_out,
-                    "llm.system_prompt_len": len(system_prompt),
-                    "llm.user_prompt_len": len(user_prompt),
-                    "llm.response_len": len(response),
-                    "input.value": (system_prompt + "\n---\n" + user_prompt)[:_TRUNCATE_ATTR],
-                    "input.mime_type": "text/plain",
-                    "output.value": response[:_TRUNCATE_ATTR],
-                    "output.mime_type": "text/plain",
-                },
+                attributes=attrs,
             )
             if error:
                 span.set_attribute("error", error[:1000])
@@ -242,6 +259,58 @@ def _log_llm_call(
             span.end()
         except Exception:
             pass  # telemetry must never break the LLM call
+
+# ---------------------------------------------------------------------------
+# Stream-JSON output parsing
+# ---------------------------------------------------------------------------
+
+def _parse_stream_json(stdout: str) -> tuple[str, dict]:
+    """Parse Claude CLI ``--output-format stream-json`` output.
+
+    Each line is one JSON event.  The terminating ``result`` event
+    contains the canonical final text plus a ``usage`` block with token
+    counts and ``total_cost_usd`` (subscription users see the equivalent
+    cost the API would have charged).  If the process was killed
+    mid-stream, we fall back to concatenating ``text`` content from
+    every ``assistant`` event so the caller still gets *some* response
+    text for diagnosis.
+
+    Returns ``(final_text, usage_dict)``.  ``usage_dict`` may be empty
+    if no ``result`` event was emitted (timeout / stall / crash).
+    """
+    final_text = ""
+    usage: dict = {}
+    cost_usd: float | None = None
+    num_turns: int | None = None
+    fallback_chunks: list[str] = []
+    for raw in stdout.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = _json.loads(raw)
+        except _json.JSONDecodeError:
+            continue
+        ev_type = obj.get("type")
+        if ev_type == "result":
+            final_text = obj.get("result", "") or final_text
+            usage = obj.get("usage") or {}
+            cost_usd = obj.get("total_cost_usd")
+            num_turns = obj.get("num_turns")
+        elif ev_type == "assistant":
+            msg = obj.get("message", {}) or {}
+            for block in msg.get("content", []) or []:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    fallback_chunks.append(block.get("text", "") or "")
+    if not final_text and fallback_chunks:
+        final_text = "".join(fallback_chunks)
+    out_usage = dict(usage) if usage else {}
+    if cost_usd is not None:
+        out_usage["total_cost_usd"] = cost_usd
+    if num_turns is not None:
+        out_usage["num_turns"] = num_turns
+    return final_text, out_usage
+
 
 # ---------------------------------------------------------------------------
 # Model name mapping: short names -> Claude CLI model IDs
@@ -468,8 +537,9 @@ class ClaudeLLM:
 
         cmd: list[str] = [
             self.claude_path,
-            "-p",                       # print mode (non-interactive)
-            "--output-format", "text",  # plain text output
+            "-p",                                # print mode (non-interactive)
+            "--output-format", "stream-json",    # JSONL with per-event usage + cost
+            "--verbose",                         # required by CLI for stream-json under --print
             "--model", resolved_model,
             "--max-turns", str(self.max_turns),
             "--permission-mode", "auto",  # headless: auto-approve tool use, no prompts
@@ -499,10 +569,18 @@ class ClaudeLLM:
         t0 = _time_mod.monotonic()
         max_retries = 3
 
+        # ``_generate_via_cli`` is itself dispatched via
+        # ``loop.run_in_executor`` in ``call()``, so this whole function
+        # already runs off the asyncio event loop.  Each LangGraph
+        # ``Send()`` fan-out lands in its own executor thread, which is
+        # what makes per-tier block fan-out actually concurrent.
+        usage: dict = {}
         for attempt in range(max_retries):
             try:
-                output, stderr_text, returncode, elapsed, timed_out, stalled = (
-                    self._run_cli_with_watchdog(cmd, user_prompt, project_root, resolved_model, t0)
+                output, stderr_text, returncode, elapsed, timed_out, stalled, usage = (
+                    self._run_cli_with_watchdog(
+                        cmd, user_prompt, project_root, resolved_model, t0,
+                    )
                 )
             except FileNotFoundError:
                 elapsed = _time_mod.monotonic() - t0
@@ -544,6 +622,7 @@ class ClaudeLLM:
                     timeout=self.timeout,
                     error=error_msg,
                     timed_out=True,
+                    usage=usage,
                 )
                 self._write_llm_event(project_root, f"llm_{reason}", {
                     "model": resolved_model,
@@ -605,6 +684,7 @@ class ClaudeLLM:
             response=output,
             duration_s=elapsed,
             timeout=self.timeout,
+            usage=usage,
         )
 
         return output
@@ -623,10 +703,15 @@ class ClaudeLLM:
         project_root: str,
         resolved_model: str,
         t0: float,
-    ) -> tuple[str, str, int, float, bool, bool]:
+    ) -> tuple[str, str, int, float, bool, bool, dict]:
         """Run the CLI via ``Popen`` with stall detection and heartbeats.
 
-        Returns ``(stdout, stderr, returncode, elapsed, timed_out, stalled)``.
+        Returns ``(response_text, stderr, returncode, elapsed, timed_out,
+        stalled, usage)`` where ``response_text`` is the final model
+        response extracted from the stream-json ``result`` event (or a
+        concatenation of partial assistant-text chunks if the stream was
+        cut short), and ``usage`` is the per-call token/cost dict (may be
+        empty on failure).
         Raises ``FileNotFoundError`` if the binary is missing.
         """
         process = subprocess.Popen(
@@ -799,7 +884,17 @@ class ClaudeLLM:
         stderr_text = "".join(stderr_chunks).strip()
         returncode = process.returncode if process.returncode is not None else -1
 
-        return stdout_text, stderr_text, returncode, elapsed, timed_out, stalled
+        # Parse the stream-json output.  On clean success the `result`
+        # event yields canonical text + usage; on stall/timeout we fall
+        # back to whatever assistant text leaked through.
+        response_text, usage = _parse_stream_json(stdout_text)
+        if not response_text:
+            # Stream-json parsing produced nothing useful — surface raw
+            # stdout (may be empty / a CLI error string) so downstream
+            # error messages still have something to print.
+            response_text = stdout_text
+
+        return response_text, stderr_text, returncode, elapsed, timed_out, stalled, usage
 
     @staticmethod
     def _write_llm_event(project_root: str, event_type: str, data: dict) -> None:
