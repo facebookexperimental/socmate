@@ -78,7 +78,7 @@ RUN pip install volare \
  && volare enable \
         --pdk sky130 \
         --pdk-root "${PDK_ROOT}" \
-        0443541050b23710d44a700a24573e4b4e610e38
+        c6d73a35f524070e85faff4a6a9eef49553ebc2b
 
 # -----------------------------------------------------------------------------
 # Tool wrappers: inside the container the EDA tools are on $PATH (provided by

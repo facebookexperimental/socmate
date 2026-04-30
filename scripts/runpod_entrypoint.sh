@@ -21,7 +21,7 @@
 #     a RunPod hour on a misconfigured pod.
 #
 # Optional overrides:
-#   SOCMATE_MODEL=opus-4.5     Pin a specific model (short name or full ID)
+#   SOCMATE_MODEL=sonnet-4.6   Pin a specific model (short name or full ID)
 #   SOCMATE_REQUIREMENTS_FILE  Path to a text file with architecture requirements
 #                              (used in mcp / pipeline modes that need a starter prompt)
 

@@ -88,7 +88,9 @@ install_sky130() {
     if [[ ! -d "$PDK_ROOT/sky130A" ]]; then
         echo "Downloading sky130 PDK via volare..."
         pip install volare
-        volare enable --pdk sky130 --pdk-root "$PDK_ROOT" 0443541050b23710d44a700a24573e4b4e610e38
+        # NOTE: pin tracks open_pdks. If volare reports "not found remotely",
+        # check `volare ls-remote --pdk sky130` for a current hash and bump.
+        volare enable --pdk sky130 --pdk-root "$PDK_ROOT" c6d73a35f524070e85faff4a6a9eef49553ebc2b
     else
         echo "Sky130 PDK already installed at $PDK_ROOT/sky130A"
     fi
@@ -139,13 +141,35 @@ verify() {
         fi
     done
 
+    # README declares minimums: yosys >= 0.40, verilator >= 5.0. Ubuntu 22.04
+    # apt ships 0.9 and 4.038 respectively, which silently break the pipeline.
+    local stale=()
+    if command -v yosys &>/dev/null; then
+        local yv
+        yv="$(yosys -V 2>&1 | grep -oE 'Yosys [0-9]+\.[0-9]+' | awk '{print $2}')"
+        if [[ -n "$yv" ]] && awk -v v="$yv" 'BEGIN{exit !(v+0 < 0.40)}'; then
+            echo "  [STALE] yosys $yv -- README requires >= 0.40 (apt jammy ships 0.9)"
+            stale+=("yosys")
+        fi
+    fi
+    if command -v verilator &>/dev/null; then
+        local vv
+        vv="$(verilator --version 2>&1 | grep -oE 'Verilator [0-9]+\.[0-9]+' | awk '{print $2}')"
+        if [[ -n "$vv" ]] && awk -v v="$vv" 'BEGIN{exit !(v+0 < 5.0)}'; then
+            echo "  [STALE] verilator $vv -- README requires >= 5.0 (apt jammy ships 4.038)"
+            stale+=("verilator")
+        fi
+    fi
+
     # Check Python packages
     python3 -c "import cocotb; print(f'  [OK] cocotb {cocotb.__version__}')" 2>/dev/null || echo "  [MISSING] cocotb"
     python3 -c "import langgraph; print(f'  [OK] langgraph {langgraph.__version__}')" 2>/dev/null || echo "  [MISSING] langgraph"
 
-    if [[ ${#missing[@]} -gt 0 ]]; then
+    if [[ ${#missing[@]} -gt 0 ]] || [[ ${#stale[@]} -gt 0 ]]; then
         echo ""
-        echo "WARNING: Some tools are missing. Install them manually."
+        echo "WARNING: Toolchain is incomplete or below required versions."
+        echo "         For a clean Linux install (no Nix, no Docker), use the"
+        echo "         OSS-CAD-Suite tarball — see README \"Option C\"."
     else
         echo ""
         echo "All core tools verified."

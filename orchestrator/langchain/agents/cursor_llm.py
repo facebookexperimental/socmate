@@ -248,19 +248,19 @@ def _log_llm_call(
 # ---------------------------------------------------------------------------
 
 _CLI_MODEL_MAP = {
-    "claude-sonnet-4-6": "claude-sonnet-4-6-20250514",
-    "sonnet-4.5": "claude-sonnet-4-5-20250514",
-    "sonnet-4": "claude-sonnet-4-20250514",
-    "opus-4.5": "claude-opus-4-5-20250514",
-    "opus-4.6": "claude-opus-4-6-20250610",
-    "haiku-3.5": "claude-3-5-haiku-20241022",
+    "opus-4.7":  "claude-opus-4-7",
+    "opus-4.6":  "claude-opus-4-7",          # legacy alias -> current Opus
+    "sonnet-4.6": "claude-sonnet-4-6",
+    "sonnet-4.5": "claude-sonnet-4-6",       # legacy alias -> current Sonnet
+    "haiku-4.5": "claude-haiku-4-5-20251001",
+    "haiku-3.5": "claude-haiku-4-5-20251001", # legacy alias -> current Haiku
 }
 
 # Default model used by every agent unless overridden. Set the SOCMATE_MODEL
 # environment variable (to either a short name above or a full Claude CLI
 # model ID) to override at runtime without code changes -- useful when the
 # default version is unavailable on a fresh CLI install.
-DEFAULT_MODEL = "opus-4.6"
+DEFAULT_MODEL = "opus-4.7"
 
 
 def _resolve_model(model: str) -> str:
@@ -472,7 +472,7 @@ class ClaudeLLM:
             "--output-format", "text",  # plain text output
             "--model", resolved_model,
             "--max-turns", str(self.max_turns),
-            "--dangerously-skip-permissions",  # never prompt (headless)
+            "--permission-mode", "auto",  # headless: auto-approve tool use, no prompts
         ]
 
         if self.disable_tools:

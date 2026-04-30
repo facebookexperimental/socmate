@@ -272,15 +272,13 @@ class TestTestbenchReusePrompt:
 class TestRtlGeneratorModel:
     def test_uses_default_model(self):
         """RTL generation should construct the agent with the project default
-        model. We assert this at the value level (DEFAULT_MODEL == 'opus-4.6')
-        rather than via source-string matching, so the symbolic refactor in
-        pipeline_helpers (model=DEFAULT_MODEL instead of a literal) does not
-        regress the contract.
+        model. We assert via the symbolic constant rather than a string literal,
+        so model bumps in cursor_llm don't require touching this test.
         """
         from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
         from orchestrator.langchain.agents.rtl_generator import RTLGeneratorAgent
         agent = RTLGeneratorAgent()
-        assert agent.llm.model == DEFAULT_MODEL == "opus-4.6"
+        assert agent.llm.model == DEFAULT_MODEL
 
 
 # ═══════════════════════════════════════════════════════════════════════════

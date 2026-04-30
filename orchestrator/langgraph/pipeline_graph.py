@@ -652,18 +652,32 @@ async def generate_rtl_node(state: BlockState) -> dict:
 # ---------------------------------------------------------------------------
 
 _TB_BUG_PATTERNS = [
+    # Python framework / import problems
     "AttributeError", "has no attribute",
     "ModuleNotFoundError", "ImportError",
-    "Timer(0)", "Timer( 0",
     "SyntaxError", "NameError",
     "TypeError: 'NoneType'",
     "TypeError: int() argument",
+    # cocotb timing / API misuse
+    "Timer(0)", "Timer( 0",
     "cocotb.result.SimFailure",
+    "start_fork",                       # removed in cocotb 2.0
+    "units=",                           # cocotb 2.0 wants unit= (singular)
+    # Compile-time port/signal mismatches
+    "Cannot find signal",
+    "No such signal",
+    "Verilator: %Error",
 ]
 
 
 def _is_likely_testbench_bug(sim_log: str) -> bool:
-    """Heuristic: returns True if sim failure is likely a testbench bug."""
+    """Heuristic: returns True if sim failure looks like a TB framework bug
+    (Python errors, missing signals, cocotb API misuse) rather than an RTL
+    logic bug. Bare assertion failures against a Python reference model are
+    NOT treated as TB bugs — they could be either a wrong reference or a
+    real RTL miscompute, and the diagnose agent is far better at telling
+    them apart than this string-match heuristic.
+    """
     return any(p in sim_log for p in _TB_BUG_PATTERNS)
 
 
@@ -769,9 +783,15 @@ async def generate_testbench_node(state: BlockState) -> dict:
 
             is_tb_bug = _is_likely_testbench_bug(sim_log)
 
-            if sim_attempt < MAX_LOCAL_RETRIES and (is_tb_bug or sim_attempt == 0):
-                log(f"  [SIM] {'TB bug detected' if is_tb_bug else 'Trying TB fix first'}"
-                    f" -- attempting local fix ({sim_attempt + 1}/{MAX_LOCAL_RETRIES})...", YELLOW)
+            # Only run the local TB-fix loop when the heuristic actually
+            # matches. Previously the orchestrator forced a TB-fix LLM call
+            # on every first failure (`is_tb_bug or sim_attempt == 0`),
+            # which burned ~5 minutes of compute on assertion failures that
+            # were genuinely RTL bugs (or, as in mcu3, TB logic bugs that
+            # required spec-level reasoning the fix-loop prompt cannot do).
+            if sim_attempt < MAX_LOCAL_RETRIES and is_tb_bug:
+                log(f"  [SIM] TB framework bug detected -- attempting "
+                    f"local fix ({sim_attempt + 1}/{MAX_LOCAL_RETRIES})...", YELLOW)
                 write_graph_event(_pr(state), "TB Fix", "llm_start", {
                     "block": block_name, "sim_attempt": sim_attempt + 1,
                     "is_tb_bug": is_tb_bug,
@@ -794,10 +814,14 @@ async def generate_testbench_node(state: BlockState) -> dict:
                     log(f"  [SIM] LLM could not fix TB, escalating to diagnose", RED)
                     break
             else:
-                if not is_tb_bug:
-                    log(f"  [SIM] Likely RTL bug, escalating to diagnose", RED)
-                else:
+                # Don't pre-classify here -- the diagnose agent does that
+                # well (see attempt_history.json / diagnosis.json), and a
+                # wrong "Likely RTL bug" line above a real TESTBENCH_BUG
+                # diagnosis is misleading.
+                if is_tb_bug:
                     log(f"  [SIM] TB fix retries exhausted, escalating to diagnose", RED)
+                else:
+                    log(f"  [SIM] Sim failed -- escalating to diagnose for classification", RED)
                 break
 
         span.set_attribute("sim_passed", sim_passed)
@@ -810,12 +834,21 @@ async def generate_testbench_node(state: BlockState) -> dict:
     if sim_result and sim_result.get("log_path"):
         existing_logs["simulate"] = sim_result["log_path"]
 
+    # Don't dump multi-KB sim stdout into the event log -- log_path already
+    # points to the full file on disk. Keep just enough to grep on (last
+    # error line) so the JSONL stays tail-able.
     sim_log_out = sim_result.get("log", "") if sim_result else ""
+    last_err = ""
+    if sim_log_out and not sim_passed:
+        for line in reversed(sim_log_out.splitlines()):
+            if line.strip() and ("Error" in line or "FAIL" in line or "Assert" in line):
+                last_err = line.strip()[:200]
+                break
     write_graph_event(_pr(state), "Generate Testbench", "graph_node_exit", {
         "block": block_name,
         "sim_passed": sim_passed,
         "tb_fixes_attempted": min(sim_attempt + 1, MAX_LOCAL_RETRIES) if sim_result and not sim_passed else 0,
-        "tool_stdout": smart_truncate(sim_log_out, 2000, "head_tail") if sim_log_out else "",
+        "last_error": last_err,
         "log_path": sim_result.get("log_path", "") if sim_result else "",
     })
 
@@ -1741,6 +1774,7 @@ async def integration_review_node(state: OrchestratorState) -> dict:
         from orchestrator.langchain.agents.integration_review_agent import (
             IntegrationReviewAgent,
         )
+        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
         agent = IntegrationReviewAgent(model=DEFAULT_MODEL, temperature=0.1)
         result = await agent.review(
             block_names=block_names,

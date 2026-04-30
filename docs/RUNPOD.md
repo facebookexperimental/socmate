@@ -40,7 +40,7 @@ is fine. There's no GPU dependency.
 | `ANTHROPIC_API_KEY` | API key from console.anthropic.com | one of API key / OAuth required for non-shell modes |
 | `CLAUDE_CODE_OAUTH_TOKEN` | OAuth token from `claude setup-token` | alternate to API key |
 | `SOCMATE_MODE` | `shell` (default), `pipeline`, `mcp`, `mcp-http`, `test` | optional |
-| `SOCMATE_MODEL` | Override default model (e.g. `opus-4.5`, `sonnet-4.5`) | optional |
+| `SOCMATE_MODEL` | Override default model (e.g. `opus-4.7`, `sonnet-4.6`, `haiku-4.5`) | optional |
 | `MCP_PORT` | Port for `mcp-http` mode (default `8765`) | optional |
 
 ## RunPod template (JSON)
