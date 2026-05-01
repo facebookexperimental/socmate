@@ -111,7 +111,12 @@ class RTLGeneratorAgent:
     _DEFAULT_CONSTRAINTS = "No tri-state buffers, no async resets, no latches (Sky130 limitations)."
 
     def __init__(self, model: str = DEFAULT_MODEL, temperature: float = 0.1):
-        self.llm = ClaudeLLM(model=model, timeout=900)
+        # 1800s default; bump via SOCMATE_RTL_TIMEOUT env var for complex blocks
+        # like CPUs / multi-stage pipelines that need more agent turns to write.
+        self.llm = ClaudeLLM(
+            model=model,
+            timeout=int(os.environ.get("SOCMATE_RTL_TIMEOUT", "1800")),
+        )
 
     async def generate(
         self,

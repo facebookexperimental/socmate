@@ -86,7 +86,7 @@ temporal:
 # LangChain agent configuration
 # Provider: Claude CLI (install: npm install -g @anthropic-ai/claude-code)
 langchain:
-  model: "opus-4.6"
+  model: "opus-4.7"
   temperature: 0.1
   max_tokens: 16000
 
@@ -112,14 +112,46 @@ telemetry:
 # Block registry -- maps Python source to RTL target.
 # OPTIONAL: If omitted, blocks come from .socmate/block_specs.json (architecture output)
 # or from an external file via start_pipeline(blocks_file="...").
-# See config.yaml block registry documentation for examples.
-# blocks:
-#   my_block:
-#     tier: 1
-#     python_source: "src/my_block.py"
-#     rtl_target: "rtl/my_block.v"
-#     testbench: "tb/cocotb/test_my_block.py"
-#     description: "My custom block"
+blocks:
+  mcu3:
+    tier: 1
+    rtl_target: "rtl/mcu3/mcu3.v"
+    testbench: "tb/cocotb/test_mcu3.py"
+    description: |
+      3-stage pipelined microcontroller, custom 16-bit ISA, single clock.
+
+      Stages:
+        S1 FETCH         : PC -> imem read; PC = PC+1 unless branch taken.
+        S2 DECODE/EXEC   : decode opcode/regs, read regfile, ALU compute, branch decision.
+        S3 WRITEBACK     : write ALU result back to destination register.
+
+      Pipeline registers between every stage. No data forwarding required for
+      this ISA: only RAW hazard is rd_S3 -> rs_S2, and the ISA is simple enough
+      that a 1-bubble stall on dependent reads is acceptable. Implement a
+      simple stall detector that holds PC and inserts a NOP into S2 when the
+      instruction in S2 reads a register the instruction in S3 will write.
+
+      ISA (16-bit instructions, 3-bit opcode, 3-bit rd, 3-bit rs1, 3-bit rs2 / 7-bit imm):
+        000 NOP                            (no-op)
+        001 ADD  rd, rs1, rs2              rd = rs1 + rs2
+        010 SUB  rd, rs1, rs2              rd = rs1 - rs2
+        011 AND  rd, rs1, rs2              rd = rs1 & rs2
+        100 OR   rd, rs1, rs2              rd = rs1 | rs2
+        101 XOR  rd, rs1, rs2              rd = rs1 ^ rs2
+        110 LDI  rd, imm7                  rd = sign_extend(imm7)
+        111 BRZ  rs1, imm7                 if (rs1 == 0) PC = PC + sign_extend(imm7)
+
+      Register file: 8 entries x 16 bits, register 0 is hard-wired to zero.
+      Reset: synchronous active-low rst_n; on reset PC=0 and all regs=0.
+      Instruction memory: external ports `imem_addr` (12-bit) and `imem_data`
+      (16-bit, 1-cycle synchronous read) — DUT only reads, no imem write port.
+      No data memory in this MCU.
+
+      Outputs: `pc[11:0]` and `dbg_r1[15:0]` (value of register 1, for testbench
+      observability). All outputs registered.
+
+      Constraints: no async resets, no latches, no tri-states (Sky130). Use
+      Verilog-2005. Target ~50 MHz on Sky130 sky130_fd_sc_hd.
 
 # Observer LLM (generates .socmate/summary_*.md after significant node transitions)
 observer:

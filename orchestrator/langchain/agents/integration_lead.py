@@ -19,6 +19,7 @@ The agent:
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -44,7 +45,10 @@ class IntegrationLeadAgent:
     """Agent for chip-level integration: compatibility check + top-level RTL."""
 
     def __init__(self, model: str = DEFAULT_MODEL, temperature: float = 0.1):
-        self.llm = ClaudeLLM(model=model, timeout=900)
+        self.llm = ClaudeLLM(
+            model=model,
+            timeout=int(os.environ.get("SOCMATE_INTEGRATION_LEAD_TIMEOUT", "2700")),
+        )
 
     async def integrate(
         self,

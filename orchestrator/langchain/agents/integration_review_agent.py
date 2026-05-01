@@ -14,6 +14,7 @@ mismatches in widths, directions, protocols, and naming.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -63,7 +64,10 @@ class IntegrationReviewAgent:
     """Reviews all uArch specs for cross-block interface coherence."""
 
     def __init__(self, model: str = DEFAULT_MODEL, temperature: float = 0.1):
-        self.llm = ClaudeLLM(model=model, timeout=900)
+        self.llm = ClaudeLLM(
+            model=model,
+            timeout=int(os.environ.get("SOCMATE_INTEGRATION_REVIEW_TIMEOUT", "2700")),
+        )
 
     async def review(
         self,

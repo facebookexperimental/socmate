@@ -201,9 +201,23 @@ def _write_step_log_error(
 # ---------------------------------------------------------------------------
 
 def load_config() -> dict:
-    """Load the project config from orchestrator/config.yaml."""
+    """Load the project config from orchestrator/config.yaml.
+
+    If ``SOCMATE_BLOCKS_FILE`` is set, the ``blocks:`` section is replaced
+    with the contents of that YAML file. Used by ``make demo`` and the
+    nightly e2e job to swap in a small reference design without touching
+    the canonical config.
+    """
     with open(CONFIG_PATH) as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+
+    blocks_override = os.environ.get("SOCMATE_BLOCKS_FILE")
+    if blocks_override:
+        with open(blocks_override) as f:
+            override = yaml.safe_load(f) or {}
+        config["blocks"] = override.get("blocks", override)
+
+    return config
 
 
 def get_blocks_by_tier(config: dict) -> dict[int, list[dict]]:
@@ -293,6 +307,7 @@ async def generate_uarch_spec(
     Also writes the spec to ``arch/uarch_specs/<block_name>.md``.
     """
     from orchestrator.langchain.agents.uarch_spec_generator import UarchSpecGenerator
+    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
 
     python_source_rel = block.get("python_source", "")
     if python_source_rel and python_source_rel.strip():
@@ -341,6 +356,7 @@ async def generate_rtl(
     previous error from disk, and writes the Verilog to block["rtl_target"].
     """
     from orchestrator.langchain.agents.rtl_generator import RTLGeneratorAgent
+    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
 
     rtl_path = PROJECT_ROOT / block["rtl_target"]
     rtl_path.parent.mkdir(parents=True, exist_ok=True)
@@ -407,6 +423,7 @@ async def generate_testbench(
 ) -> dict:
     """Generate cocotb testbench -- disk-first, agent reads/writes all files."""
     from orchestrator.langchain.agents.testbench_generator import TestbenchGeneratorAgent
+    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
 
     rtl_path = str(PROJECT_ROOT / block["rtl_target"])
     tb_path = str(PROJECT_ROOT / block["testbench"])
@@ -694,7 +711,10 @@ async def fix_lint_errors(
     )
 
     block_title = block_name.replace("_", " ").title()
-    llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=300)
+    llm = ClaudeLLM(
+        model=DEFAULT_MODEL,
+        timeout=int(os.environ.get("SOCMATE_LINT_FIX_TIMEOUT", "600")),
+    )
 
     try:
         await llm.call(
@@ -745,7 +765,10 @@ async def fix_synth_errors(
     )
 
     block_title = block_name.replace("_", " ").title()
-    llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=300)
+    llm = ClaudeLLM(
+        model=DEFAULT_MODEL,
+        timeout=int(os.environ.get("SOCMATE_SYNTH_FIX_TIMEOUT", "600")),
+    )
 
     try:
         await llm.call(
@@ -806,7 +829,15 @@ async def fix_testbench_errors(
     )
 
     block_title = block_name.replace("_", " ").title()
-    llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=300)
+    # 600s default; bump via SOCMATE_TB_FIX_TIMEOUT for complex blocks
+    # whose TB rewrite genuinely needs more than 10 minutes. The previous
+    # 300s default consistently timed out for non-trivial blocks (mcu3
+    # 3-stage CPU, multi-stage pipelines) and produced partial fixes that
+    # didn't address the root cause.
+    llm = ClaudeLLM(
+        model=DEFAULT_MODEL,
+        timeout=int(os.environ.get("SOCMATE_TB_FIX_TIMEOUT", "600")),
+    )
 
     try:
         await llm.call(
@@ -832,6 +863,7 @@ async def diagnose_failure(
 ) -> dict:
     """Run DebugAgent to analyze failure -- disk-first, agent reads all files."""
     from orchestrator.langchain.agents.debug_agent import DebugAgent
+    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
 
     agent = DebugAgent(model=DEFAULT_MODEL, temperature=0.1)
     return await agent.analyze(

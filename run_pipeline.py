@@ -43,6 +43,12 @@ from orchestrator.langgraph.pipeline_helpers import (
     RED,
     YELLOW,
 )
+from orchestrator.telemetry import init_telemetry
+
+# Bootstrap OTel before any graph code so spans land in .socmate/traces.db.
+# (Previously only mcp_server.py initialised telemetry; CLI runs produced
+# zero spans.)
+init_telemetry(str(PROJECT_ROOT))
 
 
 MAX_ATTEMPTS = 5

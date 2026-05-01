@@ -14,6 +14,7 @@ Unlike the per-block TestbenchGeneratorAgent, this agent:
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -38,7 +39,10 @@ class IntegrationTestbenchGenerator:
     """Agent for chip-level integration cocotb testbench generation."""
 
     def __init__(self, model: str = DEFAULT_MODEL, temperature: float = 0.1):
-        self.llm = ClaudeLLM(model=model, timeout=900)
+        self.llm = ClaudeLLM(
+            model=model,
+            timeout=int(os.environ.get("SOCMATE_INTEGRATION_TB_TIMEOUT", "2700")),
+        )
 
     async def generate(
         self,

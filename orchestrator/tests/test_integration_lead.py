@@ -392,19 +392,21 @@ class TestIntegrate:
 
 class TestModelNameUpdates:
     def test_integration_lead_default_model(self):
+        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
         agent = IntegrationLeadAgent()
-        assert agent.llm.model == "opus-4.6"
+        assert agent.llm.model == DEFAULT_MODEL
 
     def test_integration_testbench_default_model(self):
+        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
         from orchestrator.langchain.agents.integration_testbench_generator import (
             IntegrationTestbenchGenerator,
         )
         agent = IntegrationTestbenchGenerator()
-        assert agent.llm.model == "opus-4.6"
+        assert agent.llm.model == DEFAULT_MODEL
 
     def test_cli_model_map_has_sonnet_46(self):
         from orchestrator.langchain.agents.cursor_llm import _CLI_MODEL_MAP
-        assert "claude-sonnet-4-6" in _CLI_MODEL_MAP
+        assert "sonnet-4.6" in _CLI_MODEL_MAP
 
     def test_sonnet_46_resolves(self):
         from orchestrator.langchain.agents.cursor_llm import _resolve_model

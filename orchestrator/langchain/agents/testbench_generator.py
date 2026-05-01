@@ -16,6 +16,7 @@ Strategy:
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -44,7 +45,12 @@ class TestbenchGeneratorAgent:
     """
 
     def __init__(self, model: str = DEFAULT_MODEL, temperature: float = 0.1):
-        self.llm = ClaudeLLM(model=model, timeout=900)
+        # 1800s default; bump via SOCMATE_TB_TIMEOUT env var for complex blocks
+        # whose testbenches need many turns of tool use.
+        self.llm = ClaudeLLM(
+            model=model,
+            timeout=int(os.environ.get("SOCMATE_TB_TIMEOUT", "1800")),
+        )
 
     async def generate(
         self,

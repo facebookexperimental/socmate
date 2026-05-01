@@ -18,6 +18,7 @@ All modifications are traced via OpenTelemetry for auditability.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -76,7 +77,10 @@ class TimingClosureAgent:
     """Agent for timing closure optimization."""
 
     def __init__(self, model: str = DEFAULT_MODEL, temperature: float = 0.1):
-        self.llm = ClaudeLLM(model=model, timeout=900)
+        self.llm = ClaudeLLM(
+            model=model,
+            timeout=int(os.environ.get("SOCMATE_TIMING_CLOSURE_TIMEOUT", "2700")),
+        )
 
     async def fix_timing(
         self,
