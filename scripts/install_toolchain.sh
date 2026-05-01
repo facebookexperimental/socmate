@@ -88,9 +88,12 @@ install_sky130() {
     if [[ ! -d "$PDK_ROOT/sky130A" ]]; then
         echo "Downloading sky130 PDK via volare..."
         pip install volare
-        # NOTE: pin tracks open_pdks. If volare reports "not found remotely",
-        # check `volare ls-remote --pdk sky130` for a current hash and bump.
-        volare enable --pdk sky130 --pdk-root "$PDK_ROOT" c6d73a35f524070e85faff4a6a9eef49553ebc2b
+        # Single source of truth for the PDK pin; bump in scripts/pdk-version.env.
+        # If volare reports "not found remotely", check
+        # `volare ls-remote --pdk sky130` for a current hash and update there.
+        # shellcheck disable=SC1091
+        source "$SCRIPT_DIR/pdk-version.env"
+        volare enable --pdk sky130 --pdk-root "$PDK_ROOT" "$SKY130_PDK_COMMIT"
     else
         echo "Sky130 PDK already installed at $PDK_ROOT/sky130A"
     fi

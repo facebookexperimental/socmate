@@ -1,0 +1,35 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+#
+# Minimal reference design used by `make demo` and the nightly e2e CI job.
+# An 8-bit unsigned adder is the smallest "real" ASIC block we can take
+# end-to-end through RTL gen -> lint -> testbench -> simulation -> synthesis,
+# and it runs in a few minutes even on the slowest CI runner.
+#
+# Loaded into orchestrator/config.yaml's blocks: section via the
+# SOCMATE_BLOCKS_FILE env var (see orchestrator/langgraph/pipeline_helpers.py).
+
+blocks:
+  adder8:
+    tier: 1
+    rtl_target: "rtl/adder8/adder8.v"
+    testbench: "tb/cocotb/test_adder8.py"
+    description: |
+      8-bit unsigned ripple-carry adder. Combinational, no clock or reset.
+
+      Interface:
+        input  [7:0] a
+        input  [7:0] b
+        input        cin       (carry-in)
+        output [7:0] sum
+        output       cout      (carry-out)
+
+      Behaviour: {cout, sum} = a + b + cin.
+
+      Constraints: Verilog-2005, no latches, no async resets, no tri-states
+      (Sky130). Single-cycle combinational; no pipeline registers.
+
+      Target: Sky130 sky130_fd_sc_hd. This is a smoke-test reference design
+      used to validate a fresh socmate install end-to-end; it is not a
+      realistic production block.

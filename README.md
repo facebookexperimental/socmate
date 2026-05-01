@@ -1,6 +1,10 @@
 # socmate
 
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/facebookexperimental/socmate)
+
 An AI-orchestrated ASIC design pipeline. socmate uses LangGraph to drive the full RTL-to-GDSII flow: architecture specification, RTL generation, verification, synthesis, and physical design -- all orchestrated by Claude as the LLM backbone.
+
+> **Try it instantly:** click the Codespaces badge above for a pre-built sandbox with the full EDA toolchain (Yosys, OpenROAD, Magic, Sky130 PDK) and Claude CLI ready to go. No local install, no PDK download. Set `CLAUDE_CODE_OAUTH_TOKEN` as a Codespaces secret first — see [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md).
 
 ## What It Does
 
@@ -153,8 +157,8 @@ cp .env.example .env   # then edit and add ANTHROPIC_API_KEY
 
 # 4. Sky130 PDK (~2 GB; check `volare ls-remote --pdk sky130` for a current commit)
 pip install volare
-volare enable --pdk sky130 --pdk-root .pdk \
-  c6d73a35f524070e85faff4a6a9eef49553ebc2b
+source scripts/pdk-version.env   # pins SKY130_PDK_COMMIT (single source of truth)
+volare enable --pdk sky130 --pdk-root .pdk "$SKY130_PDK_COMMIT"
 
 # 5. Verify before burning a real run
 make preflight   # should print {"ok": true}
@@ -179,7 +183,7 @@ otherwise the latest of each works for most blocks.
 | Node.js | 20.20.x | NodeSource repo, *not* apt's 12.x |
 | Claude Code CLI | 2.x | `npm install -g @anthropic-ai/claude-code` |
 | OSS-CAD-Suite | 2026-04-29 nightly | Bundles Yosys 0.64+, Verilator 5.049, OpenROAD, Magic, netgen, KLayout |
-| Sky130 PDK | volare commit `c6d73a35f524070e85faff4a6a9eef49553ebc2b` | `volare ls-remote --pdk sky130` for current pins |
+| Sky130 PDK | volare commit pinned in [`scripts/pdk-version.env`](scripts/pdk-version.env) | `volare ls-remote --pdk sky130` for current pins |
 | Python deps | see `requirements-lock.txt` | `pip install -r requirements-lock.txt` for an exact replay |
 
 To replicate the exact dev environment:
@@ -277,6 +281,13 @@ pytest orchestrator/tests/ -v -m "not live_llm"
 # Skip tests requiring Nix/EDA tools
 pytest orchestrator/tests/ -v -m "not requires_nix and not e2e"
 ```
+
+## Further reading
+
+- [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) — wiring up the Claude CLI (OAuth token, API key, GitHub Codespaces secret)
+- [docs/LOCAL-DEV.md](docs/LOCAL-DEV.md) — running and iterating without containers
+- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — common failures (Yosys version, missing PDK, OpenROAD OOM, …)
+- [docs/RUNPOD.md](docs/RUNPOD.md) — hosted runs with a ready-to-paste pod template
 
 ## License
 

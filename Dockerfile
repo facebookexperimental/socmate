@@ -71,14 +71,16 @@ RUN pip install -e ./orchestrator
 
 # -----------------------------------------------------------------------------
 # Sky130 PDK -- install at build time so first pipeline run isn't a 5GB
-# download. Pinned to the same commit hash as scripts/install_toolchain.sh.
+# download. The pin lives in scripts/pdk-version.env so a bump only needs
+# to land in one place (Dockerfile + install_toolchain.sh + CI all read it).
 # -----------------------------------------------------------------------------
 ENV PDK_ROOT=/socmate/.pdk
 RUN pip install volare \
+ && . /socmate/scripts/pdk-version.env \
  && volare enable \
         --pdk sky130 \
         --pdk-root "${PDK_ROOT}" \
-        c6d73a35f524070e85faff4a6a9eef49553ebc2b
+        "${SKY130_PDK_COMMIT}"
 
 # -----------------------------------------------------------------------------
 # Tool wrappers: inside the container the EDA tools are on $PATH (provided by

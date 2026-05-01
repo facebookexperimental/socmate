@@ -201,9 +201,23 @@ def _write_step_log_error(
 # ---------------------------------------------------------------------------
 
 def load_config() -> dict:
-    """Load the project config from orchestrator/config.yaml."""
+    """Load the project config from orchestrator/config.yaml.
+
+    If ``SOCMATE_BLOCKS_FILE`` is set, the ``blocks:`` section is replaced
+    with the contents of that YAML file. Used by ``make demo`` and the
+    nightly e2e job to swap in a small reference design without touching
+    the canonical config.
+    """
     with open(CONFIG_PATH) as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+
+    blocks_override = os.environ.get("SOCMATE_BLOCKS_FILE")
+    if blocks_override:
+        with open(blocks_override) as f:
+            override = yaml.safe_load(f) or {}
+        config["blocks"] = override.get("blocks", override)
+
+    return config
 
 
 def get_blocks_by_tier(config: dict) -> dict[int, list[dict]]:
