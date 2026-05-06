@@ -28,27 +28,37 @@
 #     socmate:latest
 
 # -----------------------------------------------------------------------------
-# Base: efabless/openlane already has OpenROAD, Magic, netgen, KLayout, Yosys,
-# and the Sky130 PDK pinned at known-good versions, plus a working tcl/tk env.
-# We layer Python 3.11, Verilator, cocotb, Node + Claude CLI on top.
+# Base: hpretl/iic-osic-tools is an Ubuntu image bundling Yosys, OpenROAD,
+# Magic, netgen, KLayout, Verilator, ngspice, xschem (plus the Sky130 +
+# gf180mcu PDKs) at maintained pins. We layer Python 3.11, the orchestrator
+# venv, Node + Claude CLI on top, and override the VNC entrypoint with a
+# CLI one suited to Codespaces / RunPod.
 # -----------------------------------------------------------------------------
-FROM efabless/openlane:1.0.0 AS socmate
+FROM hpretl/iic-osic-tools:2026.04 AS socmate
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_MAJOR=20
 
-# OpenLane's image is non-root (UID 1000); the apt-get steps below need root.
+# IIC-OSIC-TOOLS runs as UID 1000 with a VNC entrypoint; root is needed for
+# the apt installs below and we override the entrypoint at the bottom.
 USER root
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl git gnupg make sudo \
-        python3.11 python3.11-venv python3-pip \
+        ca-certificates curl git gnupg make sudo software-properties-common \
+ && add-apt-repository -y ppa:deadsnakes/ppa \
+ && apt-get update && apt-get install -y --no-install-recommends \
+        python3.11 python3.11-venv python3.11-dev python3-pip \
         verilator \
-    && curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
+ && curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g @anthropic-ai/claude-code
+
+# IIC-OSIC-TOOLS symlinks every EDA binary into /foss/tools/bin/ via its
+# install_links.sh; putting that on PATH gives `yosys`, `openroad`, `magic`,
+# `netgen`, `klayout` (and friends) at the bare names config.yaml expects.
+ENV PATH="/foss/tools/bin:${PATH}"
 
 # -----------------------------------------------------------------------------
 # Python venv + socmate deps. Done in two layers so a code-only edit
@@ -84,8 +94,8 @@ RUN pip install volare \
 
 # -----------------------------------------------------------------------------
 # Tool wrappers: inside the container the EDA tools are on $PATH (provided by
-# the openlane base image), so the scripts/*-nix.sh wrappers just need to
-# exec the real binary. We override config.yaml to point at bare names.
+# the IIC-OSIC-TOOLS base image), so the scripts/*-nix.sh wrappers just need
+# to exec the real binary. We override config.yaml to point at bare names.
 # -----------------------------------------------------------------------------
 RUN python3 -c "import yaml, pathlib; \
 p = pathlib.Path('orchestrator/config.yaml'); \

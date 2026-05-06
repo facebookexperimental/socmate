@@ -10,8 +10,9 @@
         "context": ".."
     },
 
-    // The OpenLane base image runs as UID 1000; keep that so /socmate paths
-    // inside the container match the entrypoint script's expectations.
+    // IIC-OSIC-TOOLS defaults to UID 1000 with a VNC entrypoint; the
+    // socmate Dockerfile overrides both, but the dev container still needs
+    // root so the entrypoint can write under /socmate/.socmate, /rtl, etc.
     "remoteUser": "root",
     "containerUser": "root",
 
