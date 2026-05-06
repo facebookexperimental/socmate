@@ -41,22 +41,18 @@
 # -----------------------------------------------------------------------------
 FROM ghcr.io/efabless/openlane2:2.3.10 AS socmate
 
-ARG NODE_MAJOR=20
-
 # The image already runs as root with /nix/store on PATH, so we don't need
 # USER/WORKDIR juggling. We *do* need Node + git + curl on PATH; openlane2
 # bundles git and curl already, so only Node is missing.
 
-# Node.js from the official Linux x64 tarball (Nix-based image has no apt).
-# /usr/local/bin is on PATH ahead of /nix/store entries, so the symlinks
-# below win for the Claude CLI.
-RUN ARCH="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')" \
- && NODE_VERSION="$(curl -fsSL https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/SHASUMS256.txt | awk '/linux-'"${ARCH}"'\.tar\.xz/ {sub(/.*node-/,"node-"); sub(/-linux.*/,""); print; exit}')" \
- && curl -fsSL "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/${NODE_VERSION}-linux-${ARCH}.tar.xz" \
-        | tar -xJ -C /opt/ \
- && for bin in node npm npx corepack; do \
-        ln -sf "/opt/${NODE_VERSION}-linux-${ARCH}/bin/${bin}" "/usr/local/bin/${bin}"; \
-    done
+# Node.js + npm pulled in from the official node:20-slim image. The
+# openlane2 base is Nix-built with no apt and a sparse /usr/bin (no awk /
+# tar -J), so a tarball download doesn't work; multi-stage COPY does.
+COPY --from=node:20-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:20-slim /usr/local/include/node /usr/local/include/node
+COPY --from=node:20-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
 RUN npm install -g @anthropic-ai/claude-code
 
