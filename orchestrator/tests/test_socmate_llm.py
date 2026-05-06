@@ -20,9 +20,8 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
-import pytest
 
-from orchestrator.langchain.agents.cursor_llm import (
+from orchestrator.langchain.agents.socmate_llm import (
     ClaudeLLM,
     DEFAULT_MODEL,
     _CLI_MODEL_MAP,
@@ -142,7 +141,7 @@ class TestProcessRegistry:
 class TestCommandConstruction:
     """Verify the CLI command runs headlessly via --permission-mode auto."""
 
-    @patch("orchestrator.langchain.agents.cursor_llm._find_claude_binary")
+    @patch("orchestrator.langchain.agents.socmate_llm._find_claude_binary")
     def test_permission_mode_auto_in_cmd(self, mock_find):
         mock_find.return_value = "/usr/bin/claude"
 
@@ -158,7 +157,7 @@ class TestCommandConstruction:
             assert cmd[cmd.index("--permission-mode") + 1] == "auto"
             assert "--dangerously-skip-permissions" not in cmd
 
-    @patch("orchestrator.langchain.agents.cursor_llm._find_claude_binary")
+    @patch("orchestrator.langchain.agents.socmate_llm._find_claude_binary")
     def test_print_mode_flags(self, mock_find):
         mock_find.return_value = "/usr/bin/claude"
 
@@ -180,7 +179,7 @@ class TestCommandConstruction:
 class TestWatchdogBehaviour:
     """Test stall detection and timeout in _run_cli_with_watchdog."""
 
-    @patch("orchestrator.langchain.agents.cursor_llm._find_claude_binary")
+    @patch("orchestrator.langchain.agents.socmate_llm._find_claude_binary")
     def test_timeout_returns_partial_output(self, mock_find):
         """When the hard timeout fires, partial output should be captured."""
         mock_find.return_value = "/usr/bin/echo"
@@ -190,7 +189,7 @@ class TestWatchdogBehaviour:
         result = model._generate_via_cli("system prompt", "hello")
         assert isinstance(result, str)
 
-    @patch("orchestrator.langchain.agents.cursor_llm._find_claude_binary")
+    @patch("orchestrator.langchain.agents.socmate_llm._find_claude_binary")
     def test_stall_detection_with_short_threshold(self, mock_find):
         """A process that produces no output should be killed by stall detection."""
         mock_find.return_value = "/bin/sleep"

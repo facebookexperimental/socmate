@@ -307,7 +307,7 @@ async def generate_uarch_spec(
     Also writes the spec to ``arch/uarch_specs/<block_name>.md``.
     """
     from orchestrator.langchain.agents.uarch_spec_generator import UarchSpecGenerator
-    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
+    from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL
 
     python_source_rel = block.get("python_source", "")
     if python_source_rel and python_source_rel.strip():
@@ -356,7 +356,7 @@ async def generate_rtl(
     previous error from disk, and writes the Verilog to block["rtl_target"].
     """
     from orchestrator.langchain.agents.rtl_generator import RTLGeneratorAgent
-    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
+    from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL
 
     rtl_path = PROJECT_ROOT / block["rtl_target"]
     rtl_path.parent.mkdir(parents=True, exist_ok=True)
@@ -423,7 +423,7 @@ async def generate_testbench(
 ) -> dict:
     """Generate cocotb testbench -- disk-first, agent reads/writes all files."""
     from orchestrator.langchain.agents.testbench_generator import TestbenchGeneratorAgent
-    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
+    from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL
 
     rtl_path = str(PROJECT_ROOT / block["rtl_target"])
     tb_path = str(PROJECT_ROOT / block["testbench"])
@@ -689,7 +689,7 @@ async def fix_lint_errors(
     the Edit tool to fix in-place.  Returns True if the agent modified
     the file, None if it couldn't fix.
     """
-    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
+    from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL, ClaudeLLM
 
     prompt_file = Path(__file__).resolve().parent.parent / "langchain" / "prompts" / "lint_fixer.md"
     if prompt_file.exists():
@@ -743,7 +743,7 @@ async def fix_synth_errors(
     the Edit tool to fix in-place.  Returns True if the agent modified
     the file, None if it couldn't fix.
     """
-    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
+    from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL, ClaudeLLM
 
     prompt_file = Path(__file__).resolve().parent.parent / "langchain" / "prompts" / "synth_fixer.md"
     if prompt_file.exists():
@@ -797,7 +797,7 @@ async def fix_testbench_errors(
     and DV rules from disk, uses the Edit tool to fix in-place.
     Returns True if the agent modified the file, None if it couldn't fix.
     """
-    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
+    from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL, ClaudeLLM
 
     system_prompt = (
         "You are an expert verification engineer. A cocotb testbench is "
@@ -863,7 +863,7 @@ async def diagnose_failure(
 ) -> dict:
     """Run DebugAgent to analyze failure -- disk-first, agent reads all files."""
     from orchestrator.langchain.agents.debug_agent import DebugAgent
-    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
+    from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL
 
     agent = DebugAgent(model=DEFAULT_MODEL, temperature=0.1)
     return await agent.analyze(

@@ -19,7 +19,6 @@ Tests:
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
 from contextlib import ExitStack
 from pathlib import Path
@@ -30,22 +29,16 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
 from orchestrator.langgraph.architecture_graph import build_architecture_graph
-from orchestrator.langgraph.pipeline_graph import build_pipeline_graph
 
 from orchestrator.tests.fft16_fixtures import (
     FFT16_BLOCK_DIAGRAM,
     FFT16_CLOCK_TREE,
-    FFT16_CONSTRAINT_AUTO_FIXABLE,
-    FFT16_CONSTRAINT_PASS,
-    FFT16_FRD_DOCUMENT,
     FFT16_FRD_MARKDOWN,
     FFT16_MEMORY_MAP,
     FFT16_PRD_ANSWERS,
     FFT16_PRD_DOCUMENT,
     FFT16_PRD_QUESTIONS,
     FFT16_REGISTER_SPEC,
-    FFT16_REQUIREMENTS,
-    FFT16_SAD_DOCUMENT,
     FFT16_SAD_MARKDOWN,
 )
 from orchestrator.tests.conftest import assert_doc_files
@@ -336,9 +329,7 @@ class TestMultiRoundStability:
         fft16_initial_state["max_rounds"] = 3
         config = {"configurable": {"thread_id": "stab-round-inc-1"}}
 
-        rounds_seen = []
 
-        original_analyze = None
 
         async def bd_side_effect(*args, **kwargs):
             return FFT16_BLOCK_DIAGRAM

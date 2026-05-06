@@ -22,7 +22,6 @@ Covers:
 from __future__ import annotations
 
 import json
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -183,7 +182,6 @@ class TestRtlRegressionGuard:
     @pytest.mark.asyncio
     async def test_no_skip_on_attempt_1(self, tmp_path):
         from orchestrator.langgraph.pipeline_graph import generate_rtl_node
-        from unittest.mock import patch, AsyncMock
 
         block_name = "test_block"
         rtl_dir = tmp_path / "rtl" / "datapath"
@@ -273,9 +271,9 @@ class TestRtlGeneratorModel:
     def test_uses_default_model(self):
         """RTL generation should construct the agent with the project default
         model. We assert via the symbolic constant rather than a string literal,
-        so model bumps in cursor_llm don't require touching this test.
+        so model bumps in socmate_llm don't require touching this test.
         """
-        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
+        from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL
         from orchestrator.langchain.agents.rtl_generator import RTLGeneratorAgent
         agent = RTLGeneratorAgent()
         assert agent.llm.model == DEFAULT_MODEL

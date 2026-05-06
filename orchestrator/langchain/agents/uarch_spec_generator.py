@@ -24,7 +24,7 @@ from typing import Any
 
 from opentelemetry import trace
 
-from .cursor_llm import DEFAULT_MODEL, ClaudeLLM
+from .socmate_llm import DEFAULT_MODEL, ClaudeLLM
 
 _tracer = trace.get_tracer(__name__)
 
@@ -84,7 +84,7 @@ class UarchSpecGenerator:
             span.set_attribute("is_revision", bool(previous_spec))
 
             parts = [
-                f"Generate a microarchitecture specification for the following block.",
+                "Generate a microarchitecture specification for the following block.",
                 f"\nBlock name: {block_name}",
                 f"Description: {description}",
             ]

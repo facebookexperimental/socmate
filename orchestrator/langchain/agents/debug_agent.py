@@ -25,7 +25,7 @@ from typing import Any
 
 from opentelemetry import trace
 
-from .cursor_llm import DEFAULT_MODEL, ClaudeLLM
+from .socmate_llm import DEFAULT_MODEL, ClaudeLLM
 
 _tracer = trace.get_tracer(__name__)
 
@@ -201,7 +201,7 @@ class DebugAgent:
                 return json.loads(diag_path.read_text())
 
             return {
-                "diagnosis": f"Debug agent did not write diagnosis file",
+                "diagnosis": "Debug agent did not write diagnosis file",
                 "category": "AGENT_ERROR",
                 "suggested_fix": "Review manually",
                 "affected_blocks": [],

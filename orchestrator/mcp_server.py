@@ -255,11 +255,11 @@ class GraphLifecycle:
 
     async def run_task(self, initial_input: Any, config: dict) -> None:
         """Background task wrapper that runs the graph and updates status."""
-        from orchestrator.langchain.agents.cursor_llm import _breaker_context
+        from orchestrator.langchain.agents.socmate_llm import _breaker_context
         _breaker_context.set(self.name)
         from langgraph.errors import GraphInterrupt
         try:
-            from orchestrator.langchain.agents.cursor_llm import CircuitBreakerOpen
+            from orchestrator.langchain.agents.socmate_llm import CircuitBreakerOpen
         except Exception:
             CircuitBreakerOpen = type("CircuitBreakerOpen", (Exception,), {})
         try:
@@ -759,7 +759,7 @@ def _build_pipeline_ask_question(payload: dict) -> dict:
     # ---- uarch_spec_review ----
     if payload_type == "uarch_spec_review":
         block_name = payload.get("block_name", "")
-        spec_summary = payload.get("spec_summary", {})
+        payload.get("spec_summary", {})
         spec_text_preview = payload.get("spec_text", "")[:500]
 
         q_text = f"Microarchitecture spec for '{block_name}' is ready for review.\n\n"
@@ -1232,8 +1232,8 @@ async def pause_architecture() -> str:
         })
 
     # Kill any stuck CLI subprocesses first so the task can actually cancel
-    from orchestrator.langchain.agents.cursor_llm import kill_active_cli_processes
-    killed = kill_active_cli_processes()
+    from orchestrator.langchain.agents.socmate_llm import kill_active_cli_processes
+    kill_active_cli_processes()
 
     if _architecture.task and not _architecture.task.done():
         _architecture.task.cancel()
@@ -1731,7 +1731,7 @@ async def start_pipeline(
 
     # Auto-pause architecture if it's still running (mirrors pause_architecture)
     if _architecture.status == "running":
-        from orchestrator.langchain.agents.cursor_llm import kill_active_cli_processes
+        from orchestrator.langchain.agents.socmate_llm import kill_active_cli_processes
         if _architecture.task and not _architecture.task.done():
             _architecture.task.cancel()
             try:
@@ -1944,7 +1944,6 @@ async def get_pipeline_state() -> str:
     tier_blocks = [b for b in block_queue if b.get("tier", 1) == current_tier] if current_tier else []
 
     # Derive completed tiers
-    completed_tiers = current_tier_index
     total_tiers = len(tier_list) if tier_list else len(set(b.get("tier", 1) for b in block_queue))
 
     result = {
@@ -2022,7 +2021,7 @@ async def get_pipeline_state() -> str:
         result["diagnostics"] = diag
 
     # Guide the outer agent on what to do next when pipeline finishes
-    if values.get("pipeline_done") and status == "done":
+    if values.get("pipeline_done") and _pipeline.status == "done":
         all_passed = all(
             b.get("success") for b in completed
         ) if completed else False
@@ -2047,8 +2046,8 @@ async def get_pipeline_state() -> str:
                     + (
                         "Integration check passed."
                         if integration_ok
-                        else f"Integration check skipped "
-                             f"(single-block design)."
+                        else "Integration check skipped "
+                             "(single-block design)."
                     )
                     + " Call start_backend() to proceed to PnR/DRC/LVS."
                 )
@@ -2101,7 +2100,7 @@ def _build_resume_command(state_snapshot, resume_value, action, constraint,
     if not interrupt_info:
         return None  # No pending interrupts, resume with None
 
-    interrupt_ids = [iid for iid, _, _ in interrupt_info]
+    [iid for iid, _, _ in interrupt_info]
 
     per_block: dict[str, str] = {}
     if block_actions:
@@ -2297,8 +2296,8 @@ async def pause_pipeline() -> str:
         })
 
     # Kill any stuck CLI subprocesses first so the task can actually cancel
-    from orchestrator.langchain.agents.cursor_llm import kill_active_cli_processes
-    killed = kill_active_cli_processes()
+    from orchestrator.langchain.agents.socmate_llm import kill_active_cli_processes
+    kill_active_cli_processes()
 
     if _pipeline.task and not _pipeline.task.done():
         _pipeline.task.cancel()
@@ -3350,8 +3349,8 @@ async def pause_backend() -> str:
         })
 
     # Kill any stuck CLI subprocesses first so the task can actually cancel
-    from orchestrator.langchain.agents.cursor_llm import kill_active_cli_processes
-    killed = kill_active_cli_processes()
+    from orchestrator.langchain.agents.socmate_llm import kill_active_cli_processes
+    kill_active_cli_processes()
 
     if _backend.task and not _backend.task.done():
         _backend.task.cancel()

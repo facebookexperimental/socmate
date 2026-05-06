@@ -24,7 +24,6 @@ import json
 import re
 from html import escape as _esc
 from pathlib import Path
-from typing import Any
 
 
 _TMPL_DIR = Path(__file__).resolve().parents[2] / "langchain" / "prompts"

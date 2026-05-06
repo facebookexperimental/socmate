@@ -329,7 +329,7 @@ def gds_to_gltf(
         ))
 
         # Mesh (one per layer)
-        mesh_idx = len(meshes)
+        len(meshes)
         meshes.append(Mesh(
             primitives=[Primitive(
                 attributes=Attributes(POSITION=pos_acc),

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -222,7 +221,7 @@ class TestConstraintChecker:
 
     def _mock_llm(self, violations):
         """Return a patch context manager that mocks ClaudeLLM to return violations."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
 
         response = json.dumps({"violations": violations, "reasoning": "test"})
         p = patch("orchestrator.architecture.constraints.ClaudeLLM")
@@ -234,7 +233,7 @@ class TestConstraintChecker:
         from orchestrator.architecture.constraints import check_constraints
 
         llm_response = json.dumps({"violations": [], "reasoning": "All checks pass."})
-        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+        with patch("orchestrator.langchain.agents.socmate_llm.ClaudeLLM") as MockLLM:
             MockLLM.return_value.call = AsyncMock(return_value=llm_response)
             violations = await check_constraints(
                 block_diagram=sample_block_diagram,
@@ -265,7 +264,7 @@ class TestConstraintChecker:
             }
         }
 
-        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+        with patch("orchestrator.langchain.agents.socmate_llm.ClaudeLLM") as MockLLM:
             MockLLM.return_value.call = AsyncMock(return_value=llm_response)
             violations = await check_constraints(
                 block_diagram={"blocks": [], "connections": []},
@@ -291,7 +290,7 @@ class TestConstraintChecker:
         ]
         diagram = {"blocks": blocks, "connections": []}
 
-        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+        with patch("orchestrator.langchain.agents.socmate_llm.ClaudeLLM") as MockLLM:
             MockLLM.return_value.call = AsyncMock(return_value=llm_response)
             violations = await check_constraints(
                 block_diagram=diagram,
@@ -318,7 +317,7 @@ class TestConstraintChecker:
             "connections": [],
         }
 
-        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+        with patch("orchestrator.langchain.agents.socmate_llm.ClaudeLLM") as MockLLM:
             MockLLM.return_value.call = AsyncMock(return_value=llm_response)
             violations = await check_constraints(
                 block_diagram=diagram,
@@ -343,7 +342,7 @@ class TestConstraintChecker:
             {"name": "orphan_block", "description": "No connections", "tier": 1}
         ]
 
-        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+        with patch("orchestrator.langchain.agents.socmate_llm.ClaudeLLM") as MockLLM:
             MockLLM.return_value.call = AsyncMock(return_value=llm_response)
             violations = await check_constraints(
                 block_diagram=diagram,
@@ -388,7 +387,7 @@ class TestStubSpecialists:
         })
 
         with patch(
-            "orchestrator.langchain.agents.cursor_llm.ClaudeLLM"
+            "orchestrator.langchain.agents.socmate_llm.ClaudeLLM"
         ) as MockLLM:
             MockLLM.return_value.call = AsyncMock(return_value=llm_response)
             from orchestrator.architecture.specialists.clock_tree import analyze_clock_tree
@@ -419,7 +418,7 @@ class TestStubSpecialists:
         })
 
         with patch(
-            "orchestrator.langchain.agents.cursor_llm.ClaudeLLM"
+            "orchestrator.langchain.agents.socmate_llm.ClaudeLLM"
         ) as MockLLM:
             MockLLM.return_value.call = AsyncMock(return_value=llm_response)
             from orchestrator.architecture.specialists.register_spec import (
@@ -549,9 +548,9 @@ class TestBenchmarkTemplates:
 class TestBlockSpecsRoundtrip:
     def test_block_specs_json_roundtrip(self, tmp_project, sample_block_diagram):
         """Verify that finalize -> block_specs.json roundtrip works."""
-        from orchestrator.architecture.state import ArchitectureState, save_state
+        from orchestrator.architecture.state import ArchitectureState
 
-        state = ArchitectureState(
+        ArchitectureState(
             requirements="test",
             block_diagram=sample_block_diagram,
         )
@@ -627,19 +626,19 @@ class TestEndToEndStateFlow:
         state.memory_map = mm
         save_state(state, tmp_project)
 
-        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+        with patch("orchestrator.langchain.agents.socmate_llm.ClaudeLLM") as MockLLM:
             MockLLM.return_value.call = AsyncMock(return_value=ct_response)
             ct = await analyze_clock_tree(sample_block_diagram, 50.0)
         state.clock_tree = ct
         save_state(state, tmp_project)
 
-        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+        with patch("orchestrator.langchain.agents.socmate_llm.ClaudeLLM") as MockLLM:
             MockLLM.return_value.call = AsyncMock(return_value=rs_response)
             rs = await analyze_register_spec(sample_block_diagram)
         state.register_spec = rs
         save_state(state, tmp_project)
 
-        with patch("orchestrator.langchain.agents.cursor_llm.ClaudeLLM") as MockLLM:
+        with patch("orchestrator.langchain.agents.socmate_llm.ClaudeLLM") as MockLLM:
             MockLLM.return_value.call = AsyncMock(return_value=cc_response)
             violations = await check_constraints(
                 block_diagram=sample_block_diagram,

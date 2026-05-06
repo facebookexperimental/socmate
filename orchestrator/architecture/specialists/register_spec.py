@@ -17,7 +17,6 @@ meaningful field definitions for each block.
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from pathlib import Path
@@ -88,7 +87,7 @@ async def analyze_register_spec(
 
         user_message = "\n".join(parts)
 
-        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
+        from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL, ClaudeLLM
 
         llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=1200)
 

@@ -23,7 +23,6 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import time as _time
 from pathlib import Path
 
 from orchestrator.langgraph.pipeline_helpers import (
@@ -1499,7 +1498,7 @@ def run_drc_flow(
     spice_path = result["spice_path"]
 
     if drc_count == 0:
-        log(f"  [DRC] Clean -- no violations", GREEN)
+        log("  [DRC] Clean -- no violations", GREEN)
     else:
         log(f"  [DRC] {drc_count} violations found", RED)
 
@@ -1541,7 +1540,7 @@ def run_lvs_flow(
     )
 
     if result["match"]:
-        log(f"  [LVS] Match", GREEN)
+        log("  [LVS] Match", GREEN)
     else:
         log(f"  [LVS] Mismatch: device_delta={result['device_delta']}, "
             f"net_delta={result['net_delta']}", RED)

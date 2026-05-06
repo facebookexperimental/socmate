@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
 
 
 _PROMPT_FILE = (
@@ -79,7 +78,7 @@ async def diagnose_tapeout_failure(
             "Return ONLY the JSON object."
         )
 
-        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
+        from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL, ClaudeLLM
 
         llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=120)
 

@@ -93,4 +93,4 @@ export SOCMATE_MODEL=sonnet-4.6   # ~5x cheaper, slightly less reliable on hard 
 export SOCMATE_MODEL=haiku-4.5    # cheapest; fine for trivial blocks
 ```
 
-The mapping from short names (`opus-4.7`, `sonnet-4.6`, `haiku-4.5`, …) to full CLI model IDs lives in `orchestrator/langchain/agents/cursor_llm.py`. Unknown short names pass through verbatim, so any model the CLI accepts works.
+The mapping from short names (`opus-4.7`, `sonnet-4.6`, `haiku-4.5`, …) to full CLI model IDs lives in `orchestrator/langchain/agents/socmate_llm.py`. Unknown short names pass through verbatim, so any model the CLI accepts works.

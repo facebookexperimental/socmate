@@ -17,7 +17,6 @@ while making intelligent decisions about sizing and layout.
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from pathlib import Path
@@ -142,7 +141,7 @@ async def analyze_memory_map(
 
         user_message = "\n".join(parts)
 
-        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
+        from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL, ClaudeLLM
 
         llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=1200)
         system_prompt = SYSTEM_PROMPT.format(topology_context=topology_context)

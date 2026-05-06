@@ -23,7 +23,7 @@ from typing import Any
 
 from opentelemetry import trace
 
-from .cursor_llm import DEFAULT_MODEL, ClaudeLLM
+from .socmate_llm import DEFAULT_MODEL, ClaudeLLM
 
 _tracer = trace.get_tracer(__name__)
 
@@ -102,7 +102,7 @@ class TestbenchGeneratorAgent:
             )
 
             run_name = f"Generate Testbench [{block_title}]"
-            content = await self.llm.call(
+            await self.llm.call(
                 system=SYSTEM_PROMPT,
                 prompt=user_message,
                 run_name=run_name,

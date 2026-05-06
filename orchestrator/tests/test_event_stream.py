@@ -70,7 +70,7 @@ class TestWriteGraphEvent:
         lines = log_path.read_text().strip().split("\n")
         assert len(lines) == 3
 
-        nodes = [json.loads(l)["node"] for l in lines]
+        nodes = [json.loads(line)["node"] for line in lines]
         assert nodes == ["A", "B", "C"]
 
     def test_events_without_data(self, event_project):

@@ -13,7 +13,6 @@ Integration tests require Nix + Sky130 PDK and are marked with
 
 from __future__ import annotations
 
-import os
 import shutil
 import textwrap
 from pathlib import Path

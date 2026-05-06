@@ -18,9 +18,7 @@ Coverage:
 from __future__ import annotations
 
 import json
-import re
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -221,7 +219,7 @@ class TestBuildPrompt:
         ]
         agent = IntegrationLeadAgent()
         prompt = agent._build_prompt("top", {}, [], conns, "")
-        conn_lines = [l for l in prompt.split("\n") if "blk_" in l]
+        conn_lines = [line for line in prompt.split("\n") if "blk_" in line]
         assert len(conn_lines) <= 50
 
 
@@ -392,12 +390,12 @@ class TestIntegrate:
 
 class TestModelNameUpdates:
     def test_integration_lead_default_model(self):
-        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
+        from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL
         agent = IntegrationLeadAgent()
         assert agent.llm.model == DEFAULT_MODEL
 
     def test_integration_testbench_default_model(self):
-        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
+        from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL
         from orchestrator.langchain.agents.integration_testbench_generator import (
             IntegrationTestbenchGenerator,
         )
@@ -405,11 +403,11 @@ class TestModelNameUpdates:
         assert agent.llm.model == DEFAULT_MODEL
 
     def test_cli_model_map_has_sonnet_46(self):
-        from orchestrator.langchain.agents.cursor_llm import _CLI_MODEL_MAP
+        from orchestrator.langchain.agents.socmate_llm import _CLI_MODEL_MAP
         assert "sonnet-4.6" in _CLI_MODEL_MAP
 
     def test_sonnet_46_resolves(self):
-        from orchestrator.langchain.agents.cursor_llm import _resolve_model
+        from orchestrator.langchain.agents.socmate_llm import _resolve_model
         resolved = _resolve_model("claude-sonnet-4-6")
         assert "claude-sonnet-4-6" in resolved
 

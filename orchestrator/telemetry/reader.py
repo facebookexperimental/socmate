@@ -332,7 +332,7 @@ def get_node_traces(db_path: str, node_name: str) -> list[dict[str, Any]]:
             return []
 
         # Collect trace IDs to also fetch child spans (e.g. LLM calls)
-        trace_ids = list({s["trace_id"] for s in node_spans})
+        list({s["trace_id"] for s in node_spans})
         parent_ids = [s["span_id"] for s in node_spans]
 
         # Fetch descendants: spans in the same traces whose ancestor

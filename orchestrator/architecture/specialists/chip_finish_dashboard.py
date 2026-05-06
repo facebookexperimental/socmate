@@ -19,10 +19,13 @@ from __future__ import annotations
 
 import html as html_module
 import json
-import os
 import re
 from pathlib import Path
 from typing import Any
+
+from orchestrator.architecture.specialists.dashboard_doc import (
+    _blocks_to_mermaid,
+)
 
 
 _TEMPLATE_FILE = (
@@ -30,10 +33,6 @@ _TEMPLATE_FILE = (
     / "langchain"
     / "prompts"
     / "chip_finish_template.html"
-)
-
-from orchestrator.architecture.specialists.dashboard_doc import (
-    _blocks_to_mermaid,
 )
 
 _GDS_SIZE_THRESHOLD = 20 * 1024 * 1024  # 20 MB
@@ -1262,7 +1261,7 @@ def _vcd_to_wavedrom(vcd_path: Path) -> dict | None:
     sample_times = [
         i * clk_period for i in range(actual_cycles + 1)
     ]
-    max_time = sample_times[-1]
+    sample_times[-1]
 
     toplevel_scope = ""
     scope_counts: dict[str, int] = {}

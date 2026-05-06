@@ -46,9 +46,6 @@ from orchestrator.langgraph.architecture_graph import (
 from orchestrator.tests.fft16_fixtures import (
     FFT16_BLOCK_DIAGRAM,
     FFT16_CLOCK_TREE,
-    FFT16_CONSTRAINT_AUTO_FIXABLE,
-    FFT16_CONSTRAINT_PASS,
-    FFT16_CONSTRAINT_STRUCTURAL,
     FFT16_FRD_DOCUMENT,
     FFT16_MEMORY_MAP,
     FFT16_PRD_ANSWERS,
@@ -913,7 +910,7 @@ class TestCheckpointPersistence:
             prd_result=FFT16_PRD_DOCUMENT,
             constraint_result=structural_violations,
         ):
-            result = await graph.ainvoke(
+            await graph.ainvoke(
                 Command(resume={"action": "continue", "answers": FFT16_PRD_ANSWERS}),
                 config,
             )

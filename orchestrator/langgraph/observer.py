@@ -26,7 +26,6 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -154,13 +153,13 @@ def _gather_architecture_context(project_root: str) -> str:
 
         tech = prd_doc.get("target_technology", {})
         if tech:
-            parts.append(f"\n### Target Technology")
+            parts.append("\n### Target Technology")
             parts.append(f"- PDK: {tech.get('pdk', 'N/A')}, {tech.get('process_nm', '?')} nm")
             parts.append(f"- Rationale: {tech.get('rationale', 'N/A')}")
 
         sf = prd_doc.get("speed_and_feeds", {})
         if sf:
-            parts.append(f"\n### Speed & Feeds")
+            parts.append("\n### Speed & Feeds")
             parts.append(f"- Input rate: {sf.get('input_data_rate_mbps', 'N/A')} Mbps")
             parts.append(f"- Output rate: {sf.get('output_data_rate_mbps', 'N/A')} Mbps")
             parts.append(f"- Clock: {sf.get('target_clock_mhz', 'N/A')} MHz")
@@ -170,13 +169,13 @@ def _gather_architecture_context(project_root: str) -> str:
 
         area = prd_doc.get("area_budget", {})
         if area:
-            parts.append(f"\n### Area Budget")
+            parts.append("\n### Area Budget")
             parts.append(f"- Max gates: {area.get('max_gate_count', 'N/A')}")
             parts.append(f"- Max die area: {area.get('max_die_area_mm2', 'N/A')} mm²")
 
         power = prd_doc.get("power_budget", {})
         if power:
-            parts.append(f"\n### Power Budget")
+            parts.append("\n### Power Budget")
             parts.append(f"- Total: {power.get('total_power_mw', 'N/A')} mW")
             domains = power.get("power_domains", [])
             if domains:
@@ -184,26 +183,26 @@ def _gather_architecture_context(project_root: str) -> str:
 
         df = prd_doc.get("dataflow", {})
         if df:
-            parts.append(f"\n### Dataflow")
+            parts.append("\n### Dataflow")
             parts.append(f"- Topology: {df.get('topology', 'N/A')}")
             parts.append(f"- Bus: {df.get('bus_protocol', 'N/A')}")
             parts.append(f"- Width: {df.get('data_width_bits', 'N/A')} bits")
 
         func_reqs = prd_doc.get("functional_requirements", [])
         if func_reqs:
-            parts.append(f"\n### Functional Requirements")
+            parts.append("\n### Functional Requirements")
             for r in func_reqs:
                 parts.append(f"- {r}")
 
         constraints = prd_doc.get("constraints", [])
         if constraints:
-            parts.append(f"\n### Constraints")
+            parts.append("\n### Constraints")
             for c in constraints:
                 parts.append(f"- {c}")
 
         open_items = prd_doc.get("open_items", [])
         if open_items:
-            parts.append(f"\n### Open Items")
+            parts.append("\n### Open Items")
             for item in open_items:
                 parts.append(f"- {item}")
 
@@ -245,7 +244,7 @@ def _gather_architecture_context(project_root: str) -> str:
     mm_raw = state.get("memory_map", {})
     mm = mm_raw.get("result", mm_raw) if isinstance(mm_raw, dict) else {}
     if mm and mm.get("peripherals"):
-        parts.append(f"\n## Memory Map")
+        parts.append("\n## Memory Map")
         for p in mm["peripherals"]:
             parts.append(
                 f"- {p.get('name', '?')}: 0x{p.get('base_address', 0):08X} "
@@ -256,7 +255,7 @@ def _gather_architecture_context(project_root: str) -> str:
     ct_raw = state.get("clock_tree", {})
     ct = ct_raw.get("result", ct_raw) if isinstance(ct_raw, dict) else {}
     if ct and ct.get("domains"):
-        parts.append(f"\n## Clock Tree")
+        parts.append("\n## Clock Tree")
         for d in ct["domains"]:
             parts.append(
                 f"- {d.get('name', '?')}: {d.get('frequency_mhz', '?')} MHz"
@@ -266,7 +265,7 @@ def _gather_architecture_context(project_root: str) -> str:
     rs_raw = state.get("register_spec", {})
     rs = rs_raw.get("result", rs_raw) if isinstance(rs_raw, dict) else {}
     if rs and rs.get("blocks"):
-        parts.append(f"\n## Register Spec")
+        parts.append("\n## Register Spec")
         parts.append(f"{len(rs['blocks'])} blocks with register definitions")
 
     # Pending questions
@@ -511,7 +510,7 @@ def _gather_frontend_context(project_root: str) -> str:
     # DV trends (from shared helper)
     failure_categories = failure_agg.get("failure_categories", {})
     if failure_categories:
-        parts.append(f"\n## DV Failure Trends")
+        parts.append("\n## DV Failure Trends")
         for cat, count in sorted(failure_categories.items(), key=lambda x: -x[1]):
             parts.append(f"- **{cat}**: {count} occurrences")
         systematic = failure_agg.get("systematic_patterns", [])
@@ -524,14 +523,14 @@ def _gather_frontend_context(project_root: str) -> str:
 
     # Gate counts
     if gate_counts:
-        parts.append(f"\n## Synthesis Results")
+        parts.append("\n## Synthesis Results")
         for block, gc in sorted(gate_counts.items()):
             parts.append(f"- {block}: {gc:,} gates")
 
     # Blocks needing attention
     attention = failed + failing
     if attention:
-        parts.append(f"\n## Needs Attention")
+        parts.append("\n## Needs Attention")
         for b in attention:
             info = blocks[b]
             parts.append(f"- **{b}**: {info['status']} at phase {info['phase']}")
@@ -587,7 +586,7 @@ def _gather_backend_context(project_root: str) -> str:
 
     attention = [b for b, s in blocks.items() if s["status"] in ("failed", "failing")]
     if attention:
-        parts.append(f"\n## Needs Attention")
+        parts.append("\n## Needs Attention")
         for b in attention:
             info = blocks[b]
             parts.append(f"- **{b}**: {info['status']} at phase {info['phase']}")
@@ -661,7 +660,7 @@ def _get_llm():
     """Lazy-initialise the observer LLM (claude-sonnet-4-6 via Claude CLI)."""
     global _llm_instance
     if _llm_instance is None:
-        from orchestrator.langchain.agents.cursor_llm import ClaudeLLM
+        from orchestrator.langchain.agents.socmate_llm import ClaudeLLM
         _llm_instance = ClaudeLLM(
             model="claude-sonnet-4-6",
             timeout=60,

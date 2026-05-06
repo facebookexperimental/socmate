@@ -39,7 +39,6 @@ from orchestrator.langgraph.backend_graph import (
     backend_complete_node,
 )
 
-from orchestrator.tests.fft16_fixtures import FFT16_BLOCK_DIAGRAM
 
 
 # ---------------------------------------------------------------------------

@@ -26,7 +26,7 @@ from typing import Any
 
 from opentelemetry import trace
 
-from .cursor_llm import DEFAULT_MODEL, ClaudeLLM
+from .socmate_llm import DEFAULT_MODEL, ClaudeLLM
 
 _tracer = trace.get_tracer(__name__)
 

@@ -76,7 +76,7 @@ async def generate_frd(
             f"After writing, respond with only the file path confirmation."
         )
 
-        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
+        from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL, ClaudeLLM
 
         llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=1200)
 

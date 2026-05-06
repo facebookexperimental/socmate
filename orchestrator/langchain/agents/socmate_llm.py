@@ -31,7 +31,6 @@ import shutil
 import threading
 import time as _time_mod
 from pathlib import Path
-from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -764,7 +763,6 @@ class ClaudeLLM:
         live_dir.mkdir(parents=True, exist_ok=True)
         stream_path = live_dir / f"{process.pid}.json"
         wall_start = _time_mod.time()  # wall clock for event correlation
-        last_stream_chunk_count = -1  # force first write
 
         # Write initial stream file immediately so the webview can detect
         # a streaming call before the first poll cycle completes.
@@ -820,7 +818,7 @@ class ClaudeLLM:
                 # progressing timer even while the model is still
                 # processing the prompt (no output yet).
                 if poll_count % self._STREAM_UPDATE_EVERY_N == 0:
-                    current_chunk_count = len(stdout_chunks)
+                    len(stdout_chunks)
                     try:
                         chunks_snap = list(stdout_chunks)
                         stream_data = _json.dumps({
@@ -835,7 +833,6 @@ class ClaudeLLM:
                         tmp = stream_path.with_suffix(".tmp")
                         tmp.write_text(stream_data, encoding="utf-8")
                         tmp.rename(stream_path)
-                        last_stream_chunk_count = current_chunk_count
                     except Exception:
                         pass
 

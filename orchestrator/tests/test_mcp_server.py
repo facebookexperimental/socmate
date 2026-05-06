@@ -23,7 +23,6 @@ import pytest
 
 from orchestrator.tests.fft16_fixtures import (
     FFT16_ERS_ANSWERS,
-    FFT16_PRD_ANSWERS,
     FFT16_REQUIREMENTS,
 )
 
@@ -1189,7 +1188,7 @@ class TestResetProjectPerDocFiles:
         (socmate / "summary_architecture.md").write_text("# summary")
 
         result_json = await mcp.reset_project(scope="architecture")
-        result = json.loads(result_json)
+        json.loads(result_json)
 
         for doc in all_docs:
             json_path = socmate / f"{doc}.json"

@@ -68,7 +68,6 @@ from orchestrator.utils import smart_truncate
 from orchestrator.langgraph.integration_helpers import (
     discover_block_rtl,
     generate_integration_testbench,
-    lint_top_level,
     load_architecture_connections,
     parse_verilog_ports,
     run_integration_simulation,
@@ -605,7 +604,7 @@ async def generate_rtl_node(state: BlockState) -> dict:
                 lint_span.set_attribute("local_fixes", local_attempt)
                 break
 
-            log(f"  [LINT] Errors found", RED)
+            log("  [LINT] Errors found", RED)
             log(f"    {lint_result.get('errors', '')[:200]}", RED)
 
             if local_attempt < MAX_LOCAL_RETRIES:
@@ -625,12 +624,12 @@ async def generate_rtl_node(state: BlockState) -> dict:
                 })
 
                 if fixed_rtl:
-                    log(f"  [LINT] Local fix applied, re-linting...", YELLOW)
+                    log("  [LINT] Local fix applied, re-linting...", YELLOW)
                 else:
-                    log(f"  [LINT] LLM could not produce a fix, escalating to diagnose", RED)
+                    log("  [LINT] LLM could not produce a fix, escalating to diagnose", RED)
                     break
             else:
-                log(f"  [LINT] Local retries exhausted, escalating to diagnose", RED)
+                log("  [LINT] Local retries exhausted, escalating to diagnose", RED)
 
         lint_span.set_attribute("clean", lint_clean)
 
@@ -718,7 +717,7 @@ async def generate_testbench_node(state: BlockState) -> dict:
 
     # --- Guard: RTL must exist ---
     if not rtl_path or not Path(rtl_path).exists():
-        log(f"  [TB+SIM] Skipped -- RTL file not found", RED)
+        log("  [TB+SIM] Skipped -- RTL file not found", RED)
         write_graph_event(_pr(state), "Generate Testbench", "graph_node_exit", {
             "block": block_name, "sim_passed": False, "reason": "no_rtl",
         })
@@ -738,7 +737,7 @@ async def generate_testbench_node(state: BlockState) -> dict:
         ):
             log(f"  [TB] Using existing (fresh): {block['testbench']}", GREEN)
         else:
-            log(f"  [TB] Generating cocotb testbench...", YELLOW)
+            log("  [TB] Generating cocotb testbench...", YELLOW)
             tb_result = await generate_testbench(
                 block,
                 callbacks=_callbacks(state),
@@ -756,7 +755,7 @@ async def generate_testbench_node(state: BlockState) -> dict:
 
         for sim_attempt in range(1 + MAX_LOCAL_RETRIES):
             if not tb_path_obj.exists():
-                log(f"  [SIM] Skipped -- testbench file not found", RED)
+                log("  [SIM] Skipped -- testbench file not found", RED)
                 break
 
             log(f"  [SIM] Running cocotb simulation"
@@ -784,7 +783,7 @@ async def generate_testbench_node(state: BlockState) -> dict:
                 break
 
             sim_log = sim_result.get("log", "")
-            log(f"  [SIM] FAILED", RED)
+            log("  [SIM] FAILED", RED)
             for line in sim_log.split("\n")[-5:]:
                 if line.strip():
                     log(f"    {line.strip()}", RED)
@@ -817,9 +816,9 @@ async def generate_testbench_node(state: BlockState) -> dict:
                 })
 
                 if fixed:
-                    log(f"  [SIM] TB fix applied, re-simulating...", YELLOW)
+                    log("  [SIM] TB fix applied, re-simulating...", YELLOW)
                 else:
-                    log(f"  [SIM] LLM could not fix TB, escalating to diagnose", RED)
+                    log("  [SIM] LLM could not fix TB, escalating to diagnose", RED)
                     break
             else:
                 # Don't pre-classify here -- the diagnose agent does that
@@ -827,9 +826,9 @@ async def generate_testbench_node(state: BlockState) -> dict:
                 # wrong "Likely RTL bug" line above a real TESTBENCH_BUG
                 # diagnosis is misleading.
                 if is_tb_bug:
-                    log(f"  [SIM] TB fix retries exhausted, escalating to diagnose", RED)
+                    log("  [SIM] TB fix retries exhausted, escalating to diagnose", RED)
                 else:
-                    log(f"  [SIM] Sim failed -- escalating to diagnose for classification", RED)
+                    log("  [SIM] Sim failed -- escalating to diagnose for classification", RED)
                 break
 
         span.set_attribute("sim_passed", sim_passed)
@@ -886,7 +885,7 @@ async def synthesize_node(state: BlockState) -> dict:
 
     rtl_path = state.get("rtl_path", "")
     if not rtl_path or not Path(rtl_path).exists():
-        log(f"  [SYNTH] Skipped -- RTL file not found", RED)
+        log("  [SYNTH] Skipped -- RTL file not found", RED)
         return {"synth_success": False, "synth_gate_count": 0, "phase": "synth"}
 
     write_graph_event(_pr(state), "Synthesize", "graph_node_enter", {
@@ -925,7 +924,7 @@ async def synthesize_node(state: BlockState) -> dict:
                 span.set_attribute("local_fixes", local_attempt)
                 break
 
-            log(f"  [SYNTH] FAILED", RED)
+            log("  [SYNTH] FAILED", RED)
             log(f"    {result.get('log', '')[:200]}", RED)
 
             if local_attempt < MAX_LOCAL_RETRIES:
@@ -945,12 +944,12 @@ async def synthesize_node(state: BlockState) -> dict:
                 })
 
                 if fixed_rtl:
-                    log(f"  [SYNTH] Local fix applied, re-synthesizing...", YELLOW)
+                    log("  [SYNTH] Local fix applied, re-synthesizing...", YELLOW)
                 else:
-                    log(f"  [SYNTH] LLM could not produce a fix, escalating to diagnose", RED)
+                    log("  [SYNTH] LLM could not produce a fix, escalating to diagnose", RED)
                     break
             else:
-                log(f"  [SYNTH] Local retries exhausted, escalating to diagnose", RED)
+                log("  [SYNTH] Local retries exhausted, escalating to diagnose", RED)
 
         span.set_attribute("success", synth_ok)
         span.set_attribute("gate_count", gate_count)
@@ -1011,7 +1010,7 @@ async def diagnose_node(state: BlockState) -> dict:
     _INFRA_MARKERS = ("[ClaudeLLM error:", "timed out", "exit_code=-9",
                       "circuit breaker open")
     if any(m in error_log for m in _INFRA_MARKERS):
-        log(f"  [DIAGNOSE] Infrastructure failure detected, skipping debug LLM", YELLOW)
+        log("  [DIAGNOSE] Infrastructure failure detected, skipping debug LLM", YELLOW)
         infra_diag = {
             "category": "INFRASTRUCTURE_ERROR",
             "confidence": 0.0,
@@ -1295,7 +1294,7 @@ async def ask_human_node(state: BlockState) -> dict:
     """
     block = state["current_block"]
     block_name = block["name"]
-    debug_result = state.get("debug_result", {})
+    state.get("debug_result", {})
 
     write_graph_event(_pr(state), "Ask Human", "graph_node_enter", {
         "block": block_name, "attempt": state["attempt"],
@@ -1759,7 +1758,7 @@ async def integration_review_node(state: OrchestratorState) -> dict:
     approval of the full uArch.
     """
     pr = state.get("project_root", str(PROJECT_ROOT))
-    completed = state.get("completed_blocks", [])
+    state.get("completed_blocks", [])
     block_queue = state.get("block_queue", [])
 
     tier_list = state.get("tier_list", [])
@@ -1782,7 +1781,7 @@ async def integration_review_node(state: OrchestratorState) -> dict:
         from orchestrator.langchain.agents.integration_review_agent import (
             IntegrationReviewAgent,
         )
-        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL
+        from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL
         agent = IntegrationReviewAgent(model=DEFAULT_MODEL, temperature=0.1)
         result = await agent.review(
             block_names=block_names,
@@ -1830,10 +1829,10 @@ async def integration_review_node(state: OrchestratorState) -> dict:
     })
 
     if action == "abort":
-        log(f"  [INTEGRATION REVIEW] Aborted by user/agent", RED)
+        log("  [INTEGRATION REVIEW] Aborted by user/agent", RED)
     elif action == "revise":
-        log(f"  [INTEGRATION REVIEW] Revision requested — "
-            f"use restart_block to re-generate affected specs", YELLOW)
+        log("  [INTEGRATION REVIEW] Revision requested — "
+            "use restart_block to re-generate affected specs", YELLOW)
 
     return {"integration_review_action": action}
 
@@ -2045,8 +2044,8 @@ async def integration_check_node(state: OrchestratorState) -> dict:
         )
 
         if not connections and len(passed_blocks) < 1:
-            log(f"  [INTEGRATION] No architecture connections found -- "
-                f"skipping integration check", YELLOW)
+            log("  [INTEGRATION] No architecture connections found -- "
+                "skipping integration check", YELLOW)
             write_graph_event(pr, "Integration Check", "graph_node_exit", {
                 "skipped": True,
                 "reason": "no_connections",
@@ -2085,7 +2084,7 @@ async def integration_check_node(state: OrchestratorState) -> dict:
         span.set_attribute("parsed_blocks", len(modules))
 
         if not modules:
-            log(f"  [INTEGRATION] No block RTL could be parsed", RED)
+            log("  [INTEGRATION] No block RTL could be parsed", RED)
             write_graph_event(pr, "Integration Check", "graph_node_exit", {
                 "error": "no_rtl_parsed",
             })
@@ -2192,7 +2191,7 @@ async def integration_check_node(state: OrchestratorState) -> dict:
             })
             return {"integration_result": integration_result}
 
-        log(f"  [INTEGRATION] Calling Integration Lead agent...", YELLOW)
+        log("  [INTEGRATION] Calling Integration Lead agent...", YELLOW)
         agent = IntegrationLeadAgent()
         try:
             agent_result = await agent.integrate(
@@ -2214,7 +2213,7 @@ async def integration_check_node(state: OrchestratorState) -> dict:
             }}
 
         if agent_result.get("parse_error"):
-            log(f"  [INTEGRATION] Agent returned unparseable response", RED)
+            log("  [INTEGRATION] Agent returned unparseable response", RED)
             write_graph_event(pr, "Integration Check", "graph_node_exit", {
                 "error": "parse_error",
             })
@@ -2274,7 +2273,7 @@ async def integration_check_node(state: OrchestratorState) -> dict:
 
         has_issues = len(errors) > 0 or not lint_clean
         if has_issues:
-            log(f"  [INTEGRATION] Issues found -- interrupting for review", YELLOW)
+            log("  [INTEGRATION] Issues found -- interrupting for review", YELLOW)
 
             payload = {
                 "type": "integration_failure",
@@ -2327,10 +2326,10 @@ async def integration_check_node(state: OrchestratorState) -> dict:
 
             if action == "skip":
                 integration_result["skipped_by_user"] = True
-                log(f"  [INTEGRATION] Skipped by user/agent", YELLOW)
+                log("  [INTEGRATION] Skipped by user/agent", YELLOW)
             elif action == "abort":
                 integration_result["aborted"] = True
-                log(f"  [INTEGRATION] Aborted", RED)
+                log("  [INTEGRATION] Aborted", RED)
             elif action in ("retry", "fix_rtl"):
                 fix_desc = response.get("rtl_fix_description", "")
                 log(f"  [INTEGRATION] Fix applied: {fix_desc}", GREEN)
@@ -2339,7 +2338,7 @@ async def integration_check_node(state: OrchestratorState) -> dict:
             return {"integration_result": integration_result}
 
         log(f"\n{'='*60}", GREEN)
-        log(f"  INTEGRATION CHECK PASSED", GREEN)
+        log("  INTEGRATION CHECK PASSED", GREEN)
         log(f"  Top module: {module_name}", GREEN)
         log(f"  {len(modules)} blocks, "
             f"{agent_result.get('wire_count', 0)} wires", GREEN)
@@ -2407,7 +2406,7 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
         span.set_attribute("design_name", design_name)
 
         if not top_rtl_path or not Path(top_rtl_path).exists():
-            log(f"  [INTEG-DV] Skipping -- no top-level RTL found", YELLOW)
+            log("  [INTEG-DV] Skipping -- no top-level RTL found", YELLOW)
             write_graph_event(pr, "Integration DV", "graph_node_exit", {
                 "skipped": True, "reason": "no_top_rtl",
             })
@@ -2417,7 +2416,7 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
             }}
 
         if len(block_rtl_paths) < 1:
-            log(f"  [INTEG-DV] Skipping -- no block RTL found", YELLOW)
+            log("  [INTEG-DV] Skipping -- no block RTL found", YELLOW)
             write_graph_event(pr, "Integration DV", "graph_node_exit", {
                 "skipped": True, "reason": "no_blocks",
             })
@@ -2463,7 +2462,7 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
                 modules[block_name] = mod
 
         # 1. Generate integration testbench
-        log(f"  [INTEG-DV] Generating integration testbench...", YELLOW)
+        log("  [INTEG-DV] Generating integration testbench...", YELLOW)
         try:
             tb_result = await generate_integration_testbench(
                 design_name=design_name,
@@ -2490,7 +2489,7 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
         span.set_attribute("test_count", test_count)
 
         # 2. Run integration simulation
-        log(f"  [INTEG-DV] Running integration simulation...", YELLOW)
+        log("  [INTEG-DV] Running integration simulation...", YELLOW)
         sim_result = await asyncio.to_thread(
             run_integration_simulation,
             design_name, top_rtl_path, block_rtl_paths, tb_path,
@@ -2501,7 +2500,7 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
 
         if passed:
             log(f"\n{'='*60}", GREEN)
-            log(f"  INTEGRATION DV PASSED", GREEN)
+            log("  INTEGRATION DV PASSED", GREEN)
             log(f"  {test_count} tests, all passing", GREEN)
             log(f"{'='*60}\n", GREEN)
             span.set_attribute("passed", True)
@@ -2521,7 +2520,7 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
             }}
 
         # 3. Simulation failed -- interrupt for outer agent diagnosis
-        log(f"  [INTEG-DV] FAILED", RED)
+        log("  [INTEG-DV] FAILED", RED)
         for line in sim_log.split("\n")[-10:]:
             if line.strip():
                 log(f"    {line.strip()}", RED)
@@ -2588,10 +2587,10 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
 
         if action == "skip":
             dv_result["skipped_by_user"] = True
-            log(f"  [INTEG-DV] Skipped by user/agent", YELLOW)
+            log("  [INTEG-DV] Skipped by user/agent", YELLOW)
         elif action == "abort":
             dv_result["aborted"] = True
-            log(f"  [INTEG-DV] Aborted", RED)
+            log("  [INTEG-DV] Aborted", RED)
         elif action in ("retry", "fix_rtl", "fix_tb"):
             fix_desc = response.get("rtl_fix_description", "")
             log(f"  [INTEG-DV] Fix applied: {fix_desc}", GREEN)

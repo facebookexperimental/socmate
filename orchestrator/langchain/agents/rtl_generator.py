@@ -20,7 +20,7 @@ from typing import Any
 
 from opentelemetry import trace
 
-from .cursor_llm import DEFAULT_MODEL, ClaudeLLM
+from .socmate_llm import DEFAULT_MODEL, ClaudeLLM
 
 _tracer = trace.get_tracer(__name__)
 
@@ -162,14 +162,14 @@ class RTLGeneratorAgent:
                 f"Block name: {block_name}",
                 f"Description: {description}",
                 f"Attempt: {attempt}",
-                f"",
-                f"## Working Files",
-                f"Read these files to understand the design:",
+                "",
+                "## Working Files",
+                "Read these files to understand the design:",
                 f"- uArch Spec: arch/uarch_specs/{block_name}.md",
-                f"- ERS: arch/ers_spec.md",
+                "- ERS: arch/ers_spec.md",
                 f"- Constraints: .socmate/blocks/{block_name}/constraints.json",
                 f"- Golden Model: {python_source_path}",
-                f"- Block Diagram: .socmate/block_diagram.json (for interface context)",
+                "- Block Diagram: .socmate/block_diagram.json (for interface context)",
             ]
 
             if attempt > 1:
@@ -179,10 +179,10 @@ class RTLGeneratorAgent:
                 ])
 
             parts.extend([
-                f"",
-                f"## Output",
+                "",
+                "## Output",
                 f"Write the complete synthesizable {_lang} module to: {rtl_target}",
-                f"",
+                "",
             ])
 
             if attempt > 1:

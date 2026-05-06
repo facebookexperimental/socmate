@@ -8,7 +8,7 @@ pytest-asyncio>=0.23.0
 
 # Orchestrator -- LangGraph pipeline
 # (LangChain itself is not used; agents shell out to the Claude CLI via
-# orchestrator/langchain/agents/cursor_llm.py. langgraph pulls in
+# orchestrator/langchain/agents/socmate_llm.py. langgraph pulls in
 # langchain-core transitively.)
 langgraph>=0.4.0
 langgraph-checkpoint-sqlite>=2.0.0

@@ -17,7 +17,6 @@ multi-domain architectures when the block diagram warrants it.
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from pathlib import Path
@@ -84,7 +83,7 @@ async def analyze_clock_tree(
 
         user_message = "\n".join(parts)
 
-        from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
+        from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL, ClaudeLLM
 
         llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=1200)
 

@@ -27,7 +27,6 @@ import time
 from http.server import HTTPServer
 from pathlib import Path
 from threading import Thread
-from urllib.request import urlopen, Request
 
 import pytest
 

@@ -37,7 +37,6 @@ from orchestrator.langgraph.pipeline_helpers import (
     load_config,
     get_sorted_block_queue,
     log,
-    BOLD,
     CYAN,
     GREEN,
     RED,
@@ -59,7 +58,7 @@ async def main():
     start_time = time.time()
 
     log(f"\n{'#'*60}", CYAN)
-    log(f"  socmate -- AI-Orchestrated ASIC Pipeline", CYAN)
+    log("  socmate -- AI-Orchestrated ASIC Pipeline", CYAN)
     log(f"  Target: Sky130 130nm @ {TARGET_CLOCK_MHZ} MHz", CYAN)
     log(f"{'#'*60}\n", CYAN)
 
@@ -123,7 +122,7 @@ async def main():
         current_input = initial_state
         while True:
             try:
-                result = await graph.ainvoke(current_input, graph_config)
+                await graph.ainvoke(current_input, graph_config)
                 break  # Graph completed normally
             except GraphInterrupt:
                 state = await graph.aget_state(graph_config)
@@ -175,7 +174,7 @@ async def main():
     elapsed_min = elapsed / 60.0
 
     log(f"\n{'#'*60}", CYAN)
-    log(f"  PIPELINE COMPLETE", CYAN)
+    log("  PIPELINE COMPLETE", CYAN)
     log(f"{'#'*60}\n", CYAN)
 
     passed = [r for r in completed if r.get("success")]

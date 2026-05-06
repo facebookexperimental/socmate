@@ -140,7 +140,7 @@ def generate_block_diagram_doc(
     if clock_tree:
         ct_result = clock_tree.get("result", clock_tree)
         for domain in ct_result.get("clock_domains", []):
-            domain_name = domain.get("name", "")
+            domain.get("name", "")
             freq = domain.get("frequency_mhz", "")
             for blk in domain.get("blocks", []):
                 if freq:

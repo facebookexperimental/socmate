@@ -296,7 +296,7 @@ class TestTapeoutE2E:
         )
 
         print(f"\n{'='*60}")
-        print(f"  TAPEOUT E2E RESULTS")
+        print("  TAPEOUT E2E RESULTS")
         print(f"{'='*60}")
         print(f"  Backend: PASS ({completed[0].get('attempts', '?')} attempts)")
         print(f"  Wrapper DRC: "

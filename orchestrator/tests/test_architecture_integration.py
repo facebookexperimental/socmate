@@ -361,7 +361,7 @@ class TestArchitectureMCPLifecycle:
             # Abort
             await mcp.resume_architecture(action="abort")
 
-            status = await _wait_after_resume(
+            await _wait_after_resume(
                 mcp._architecture, {"done", "error"}, timeout=15,
             )
 

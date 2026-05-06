@@ -519,7 +519,6 @@ class TestBackendGate:
 
 class TestErsGoldenModelContext:
     def test_golden_model_lines_from_block_diagram(self):
-        from orchestrator.architecture.specialists.ers_doc import generate_ers_doc
         # Just verify the golden model context building logic doesn't crash
         # (full LLM test would be slow/expensive)
         block_diagram = {
@@ -745,7 +744,7 @@ class TestBestResultPersistence:
             "orchestrator.langgraph.pipeline_graph.run_simulation",
             return_value=sim_pass,
         ):
-            result = await simulate_node(state)
+            await simulate_node(state)
 
         best_path = tmp_path / ".socmate" / "blocks" / block_name / "best_result.json"
         assert best_path.exists()

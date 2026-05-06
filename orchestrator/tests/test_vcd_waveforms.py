@@ -172,7 +172,7 @@ class TestParseVcdHeader:
         _, body_start = _parse_vcd_header(lines)
 
         remaining = lines[body_start:]
-        time_lines = [l for l in remaining if l.strip().startswith("#")]
+        time_lines = [line for line in remaining if line.strip().startswith("#")]
         assert len(time_lines) > 0
 
     def test_empty_vcd(self):

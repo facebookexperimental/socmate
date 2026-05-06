@@ -20,7 +20,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -303,7 +303,7 @@ def format_event_summary(events: list[dict]) -> str:
             if tool_out and (ev.get("clean") is False or ev.get("passed") is False
                             or ev.get("success") is False):
                 # Show last 3 lines of tool output
-                out_lines = [l.strip() for l in tool_out.strip().split("\n") if l.strip()]
+                out_lines = [line.strip() for line in tool_out.strip().split("\n") if line.strip()]
                 for ol in out_lines[-3:]:
                     lines.append(f"{DIM}{ts_str}{RESET}    {RED}{ol[:120]}{RESET}")
 

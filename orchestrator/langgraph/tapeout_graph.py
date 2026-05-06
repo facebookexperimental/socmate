@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import operator
 from pathlib import Path
 from typing import Annotated, Optional, TypedDict
 
@@ -166,7 +165,7 @@ async def _run_tapeout_llm_step(
     timeout: int = 900,
 ) -> dict:
     """Run an LLM-driven EDA step for the tapeout pipeline."""
-    from orchestrator.langchain.agents.cursor_llm import DEFAULT_MODEL, ClaudeLLM
+    from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL, ClaudeLLM
 
     prompt_path = _PROMPT_DIR / prompt_file
     system_prompt = prompt_path.read_text().format(**context)
@@ -701,7 +700,7 @@ async def diagnose_tapeout_node(state: TapeoutState) -> dict:
     confidence = result.get("confidence", 0.0)
 
     if attempt >= max_attempts and action == "auto_retry":
-        log(f"  [TAPEOUT DIAG] Max attempts reached, forcing escalate", YELLOW)
+        log("  [TAPEOUT DIAG] Max attempts reached, forcing escalate", YELLOW)
         action = "escalate"
         result["action"] = action
 
