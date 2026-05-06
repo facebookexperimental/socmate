@@ -91,12 +91,12 @@ def _make_block(name: str, tier: int = 1) -> dict:
     }
 
 
-def _initial_state(blocks: list[dict] | None = None) -> dict:
+def _initial_state(blocks: list[dict] | None = None, project_root: str = "/tmp/test") -> dict:
     """Build an initial OrchestratorState for testing."""
     if blocks is None:
         blocks = [_make_block("scrambler")]
     return {
-        "project_root": "/tmp/test",
+        "project_root": project_root,
         "target_clock_mhz": 50.0,
         "max_attempts": 3,
         "block_queue": blocks,
@@ -105,6 +105,28 @@ def _initial_state(blocks: list[dict] | None = None) -> dict:
         "completed_blocks": [],
         "pipeline_done": False,
     }
+
+
+def _setup_disk_fixtures(tmp_path, blocks: list[dict]) -> None:
+    """Create the on-disk fixtures (rtl, tb, .socmate/blocks/<name>/...)
+    expected by the disk-first pipeline nodes for the given blocks.
+    """
+    for blk in blocks:
+        name = blk["name"]
+        rtl_path = tmp_path / blk["rtl_target"]
+        rtl_path.parent.mkdir(parents=True, exist_ok=True)
+        rtl_path.write_text(f"module {name}();\nendmodule\n")
+
+        tb_path = tmp_path / blk["testbench"]
+        tb_path.parent.mkdir(parents=True, exist_ok=True)
+        tb_path.write_text(f"# tb for {name}\n")
+
+        block_dir = tmp_path / ".socmate" / "blocks" / name
+        block_dir.mkdir(parents=True, exist_ok=True)
+        (block_dir / "constraints.json").write_text("[]")
+        (block_dir / "diagnosis.json").write_text("{}")
+        (block_dir / "attempt_history.json").write_text("[]")
+        (block_dir / "previous_error.txt").write_text("")
 
 
 def _block_state(block: dict | None = None, tmp_path: str = "/tmp/test") -> dict:
@@ -539,13 +561,16 @@ class TestHappyPath:
 
 class TestInterruptFlow:
     @pytest.mark.asyncio
-    async def test_uarch_spec_auto_approves_then_integration_review_interrupts(self):
+    async def test_uarch_spec_auto_approves_then_integration_review_interrupts(self, tmp_path):
         """review_uarch_spec auto-approves; integration_review fires at orchestrator level."""
         uarch_result, rtl_result, lint_clean, _, tb_result, sim_pass, _, synth_ok = _patch_all_helpers()
 
+        block = _make_block("scrambler")
+        _setup_disk_fixtures(tmp_path, [block])
+
         graph = build_pipeline_graph(checkpointer=MemorySaver())
         config = {"configurable": {"thread_id": "test-uarch-auto-approve-1"}}
-        state = _initial_state([_make_block("scrambler")])
+        state = _initial_state([block], project_root=str(tmp_path))
 
         with patch(
             "orchestrator.langgraph.pipeline_graph.generate_uarch_spec",
@@ -563,16 +588,13 @@ class TestInterruptFlow:
             new_callable=AsyncMock,
             return_value=tb_result,
         ), patch(
-            "orchestrator.langgraph.pipeline_graph.run_cocotb_sim",
+            "orchestrator.langgraph.pipeline_graph.run_simulation",
             return_value=sim_pass,
         ), patch(
             "orchestrator.langgraph.pipeline_graph.synthesize_block",
             return_value=synth_ok,
         ), patch(
             "orchestrator.langgraph.pipeline_graph.create_golden_model_wrapper",
-        ), patch(
-            "pathlib.Path.exists",
-            return_value=False,
         ):
             await graph.ainvoke(state, config)
 
@@ -582,7 +604,7 @@ class TestInterruptFlow:
         assert "approve" in payload["supported_actions"]
 
     @pytest.mark.asyncio
-    async def test_lint_failure_triggers_interrupt(self):
+    async def test_lint_failure_triggers_interrupt(self, tmp_path):
         """lint fail -> diagnose -> decide(ask_human) -> interrupt.
 
         review_uarch_spec auto-approves so the graph flows directly
@@ -594,10 +616,15 @@ class TestInterruptFlow:
             """Mock decide node that always routes to ask_human."""
             return {"debug_action": "ask_human"}
 
-        graph = build_pipeline_graph(checkpointer=MemorySaver())
-        config = {"configurable": {"thread_id": "test-interrupt-1"}}
-        state = _initial_state([_make_block("scrambler")])
+        block = _make_block("scrambler")
+        _setup_disk_fixtures(tmp_path, [block])
 
+        config = {"configurable": {"thread_id": "test-interrupt-1"}}
+        state = _initial_state([block], project_root=str(tmp_path))
+
+        # decide_node is captured by reference inside ``build_pipeline_graph``,
+        # so the graph must be built INSIDE the patch context for the mock to
+        # take effect.
         with patch(
             "orchestrator.langgraph.pipeline_graph.generate_uarch_spec",
             new_callable=AsyncMock,
@@ -622,10 +649,8 @@ class TestInterruptFlow:
         ), patch(
             "orchestrator.langgraph.pipeline_graph.decide_node",
             side_effect=mock_decide,
-        ), patch(
-            "pathlib.Path.exists",
-            return_value=False,
         ):
+            graph = build_pipeline_graph(checkpointer=MemorySaver())
             await graph.ainvoke(state, config)
 
         payload = await _get_interrupt(graph, config)
@@ -643,7 +668,7 @@ class TestInterruptFlow:
 
 class TestResumeActions:
     @pytest.mark.asyncio
-    async def test_skip_completes_block(self):
+    async def test_skip_completes_block(self, tmp_path):
         """Resume with skip -> block_done -> pipeline_complete.
 
         review_uarch_spec auto-approves, so the first interrupt is
@@ -658,9 +683,11 @@ class TestResumeActions:
         async def mock_integration_review(state):
             return {}
 
-        graph = build_pipeline_graph(checkpointer=MemorySaver())
+        block = _make_block("scrambler")
+        _setup_disk_fixtures(tmp_path, [block])
+
         config = {"configurable": {"thread_id": "test-skip-1"}}
-        state = _initial_state([_make_block("scrambler")])
+        state = _initial_state([block], project_root=str(tmp_path))
 
         with patch(
             "orchestrator.langgraph.pipeline_graph.generate_uarch_spec",
@@ -689,17 +716,15 @@ class TestResumeActions:
         ), patch(
             "orchestrator.langgraph.pipeline_graph.integration_review_node",
             side_effect=mock_integration_review,
-        ), patch(
-            "pathlib.Path.exists",
-            return_value=False,
         ):
+            graph = build_pipeline_graph(checkpointer=MemorySaver())
             # uarch auto-approves -> lint fail -> ask_human interrupt
             await graph.ainvoke(state, config)
 
-        # Now at ask_human interrupt -- resume with skip
-        result = await graph.ainvoke(
-            Command(resume={"action": "skip"}), config
-        )
+            # Now at ask_human interrupt -- resume with skip
+            result = await graph.ainvoke(
+                Command(resume={"action": "skip"}), config
+            )
 
         # pipeline_complete_node fires a pipeline_incomplete interrupt
         # (0/1 blocks passed) before setting pipeline_done = True.
@@ -713,7 +738,7 @@ class TestResumeActions:
         assert interrupt["passed"] == 0
 
     @pytest.mark.asyncio
-    async def test_abort_stops_pipeline(self):
+    async def test_abort_stops_pipeline(self, tmp_path):
         """Resume with abort -> block_done (aborted) -> pipeline_complete.
 
         review_uarch_spec auto-approves so both parallel blocks hit
@@ -727,12 +752,11 @@ class TestResumeActions:
         async def mock_integration_review(state):
             return {}
 
-        graph = build_pipeline_graph(checkpointer=MemorySaver())
+        blocks = [_make_block("scrambler"), _make_block("crc32")]
+        _setup_disk_fixtures(tmp_path, blocks)
+
         config = {"configurable": {"thread_id": "test-abort-1"}}
-        state = _initial_state([
-            _make_block("scrambler"),
-            _make_block("crc32"),
-        ])
+        state = _initial_state(blocks, project_root=str(tmp_path))
 
         with patch(
             "orchestrator.langgraph.pipeline_graph.generate_uarch_spec",
@@ -761,15 +785,13 @@ class TestResumeActions:
         ), patch(
             "orchestrator.langgraph.pipeline_graph.integration_review_node",
             side_effect=mock_integration_review,
-        ), patch(
-            "pathlib.Path.exists",
-            return_value=False,
         ):
+            graph = build_pipeline_graph(checkpointer=MemorySaver())
             # Both blocks hit ask_human in parallel (uarch auto-approves)
             await graph.ainvoke(state, config)
 
-        # Both blocks at ask_human -- resume all with abort.
-        result = await _resume_all(graph, config, {"action": "abort"})
+            # Both blocks at ask_human -- resume all with abort.
+            result = await _resume_all(graph, config, {"action": "abort"})
 
         # pipeline_complete_node fires a pipeline_incomplete interrupt.
         aborted_blocks = [b for b in result["completed_blocks"] if b.get("aborted")]
@@ -787,7 +809,7 @@ class TestResumeActions:
 
 class TestMultiBlock:
     @pytest.mark.asyncio
-    async def test_three_blocks_same_tier_all_pass(self):
+    async def test_three_blocks_same_tier_all_pass(self, tmp_path):
         """Walk 3 same-tier blocks through the happy path (auto-approve uarch specs)."""
         uarch_result, rtl_result, lint_clean, _, tb_result, sim_pass, _, synth_ok = _patch_all_helpers()
 
@@ -796,30 +818,32 @@ class TestMultiBlock:
             _make_block("crc32", tier=1),
             _make_block("conv_encoder", tier=1),
         ]
+        _setup_disk_fixtures(tmp_path, blocks)
 
-        graph = build_pipeline_graph(checkpointer=MemorySaver())
         config = {"configurable": {"thread_id": "test-multi-1"}}
-        state = _initial_state(blocks)
+        state = _initial_state(blocks, project_root=str(tmp_path))
 
         def _make_uarch_result(block):
             return {
                 "spec_text": f"## Spec for {block['name']}",
                 "spec_summary": {"block_name": block["name"]},
-                "spec_path": f"/tmp/test/arch/uarch_specs/{block['name']}.md",
+                "spec_path": str(tmp_path / "arch" / "uarch_specs" / f"{block['name']}.md"),
                 "block_name": block["name"],
             }
 
         def _make_rtl_result(block_name):
             return {
                 "verilog": f"module {block_name}(); endmodule\n",
-                "rtl_path": f"/tmp/test/rtl/dvbt/{block_name}.v",
+                "rtl_path": str(tmp_path / "rtl" / "dvbt" / f"{block_name}.v"),
                 "ports": {"clk": "input"},
             }
 
         def _make_tb_result(block_name):
             return {
                 "testbench": "# test",
-                "testbench_path": f"/tmp/test/tb/cocotb/test_{block_name}.py",
+                "testbench_path": str(
+                    tmp_path / "tb" / "cocotb" / f"test_{block_name}.py"
+                ),
             }
 
         with patch(
@@ -846,9 +870,11 @@ class TestMultiBlock:
         ), patch(
             "orchestrator.langgraph.pipeline_graph.create_golden_model_wrapper",
         ), patch(
-            "pathlib.Path.exists",
-            return_value=False,
+            "orchestrator.langgraph.pipeline_graph.integration_review_node",
+            new_callable=AsyncMock,
+            return_value={},
         ):
+            graph = build_pipeline_graph(checkpointer=MemorySaver())
             # All 3 blocks are tier 1 -> fanned out in parallel.
             # All 3 hit uarch review interrupt simultaneously.
             # Resume all interrupts at once with approve.
@@ -868,7 +894,7 @@ class TestMultiBlock:
 
 class TestCheckpointPersistence:
     @pytest.mark.asyncio
-    async def test_state_preserved_after_integration_review_interrupt(self):
+    async def test_state_preserved_after_integration_review_interrupt(self, tmp_path):
         """Verify state is readable from checkpoint after integration_review interrupt.
 
         Since review_uarch_spec auto-approves, the first orchestrator-level
@@ -876,10 +902,12 @@ class TestCheckpointPersistence:
         """
         uarch_result, rtl_result, lint_clean, _, tb_result, sim_pass, _, synth_ok = _patch_all_helpers()
 
+        block = _make_block("scrambler")
+        _setup_disk_fixtures(tmp_path, [block])
+
         checkpointer = MemorySaver()
-        graph = build_pipeline_graph(checkpointer=checkpointer)
         config = {"configurable": {"thread_id": "test-checkpoint-1"}}
-        state = _initial_state([_make_block("scrambler")])
+        state = _initial_state([block], project_root=str(tmp_path))
 
         with patch(
             "orchestrator.langgraph.pipeline_graph.generate_uarch_spec",
@@ -897,17 +925,15 @@ class TestCheckpointPersistence:
             new_callable=AsyncMock,
             return_value=tb_result,
         ), patch(
-            "orchestrator.langgraph.pipeline_graph.run_cocotb_sim",
+            "orchestrator.langgraph.pipeline_graph.run_simulation",
             return_value=sim_pass,
         ), patch(
             "orchestrator.langgraph.pipeline_graph.synthesize_block",
             return_value=synth_ok,
         ), patch(
             "orchestrator.langgraph.pipeline_graph.create_golden_model_wrapper",
-        ), patch(
-            "pathlib.Path.exists",
-            return_value=False,
         ):
+            graph = build_pipeline_graph(checkpointer=checkpointer)
             await graph.ainvoke(state, config)
 
         graph2 = build_pipeline_graph(checkpointer=checkpointer)
