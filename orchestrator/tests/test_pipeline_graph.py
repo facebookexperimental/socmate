@@ -196,9 +196,12 @@ class TestGraphConstruction:
         subgraph = build_block_subgraph().compile()
         node_names = list(subgraph.get_graph().nodes.keys())
         expected = [
+            # Post-refactor: lint runs inside generate_rtl_node and the
+            # simulate stage was inlined into generate_testbench /
+            # synthesize_node. Update if either gets re-extracted.
             "init_block", "generate_uarch_spec", "review_uarch_spec",
-            "generate_rtl", "lint", "generate_testbench",
-            "simulate", "synthesize", "diagnose", "decide", "ask_human",
+            "generate_rtl", "generate_testbench",
+            "synthesize", "diagnose", "decide", "ask_human",
             "block_done",
         ]
         for name in expected:
