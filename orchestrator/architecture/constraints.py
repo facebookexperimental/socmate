@@ -24,7 +24,7 @@ from typing import Any
 
 from pathlib import Path
 
-_PROMPT_FILE = Path(__file__).resolve().parents[2] / "langchain" / "prompts" / "constraint_check.md"
+_PROMPT_FILE = Path(__file__).resolve().parents[1] / "langchain" / "prompts" / "constraint_check.md"
 SYSTEM_PROMPT = _PROMPT_FILE.read_text()
 
 
