@@ -32,6 +32,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ubuntu-latest gives ~14 GB free; the openlane2 base + nix-channel
+      # update + Sky130 PDK push past that. Free ~25 GB up-front by
+      # stripping preinstalled toolchains we don't use.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /opt/hostedtoolcache/CodeQL || true
+          sudo docker system prune -af || true
+          df -h /
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
