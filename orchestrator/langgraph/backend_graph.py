@@ -1158,11 +1158,17 @@ async def mpw_precheck_node(state: BackendState) -> dict:
 
 
 def route_after_precheck(state: BackendState) -> str:
-    """Route after MPW precheck: PASS -> advance_block, FAIL -> diagnose."""
+    """Route after MPW precheck: PASS -> advance_block, FAIL -> diagnose.
+
+    Both the native precheck pass AND the LLM's ``submission_ready`` flag
+    must be True to advance.  The LLM cannot override a failed native
+    precheck (matches the truth table used inside ``mpw_precheck_node``).
+    """
     precheck = state.get("precheck_result") or {}
     passed = precheck.get("pass", False)
     llm_analysis = precheck.get("llm_analysis") or {}
-    if llm_analysis.get("submission_ready", passed):
+    submission_ready = llm_analysis.get("submission_ready", passed)
+    if passed and submission_ready:
         return "advance_block"
     return "diagnose"
 

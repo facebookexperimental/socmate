@@ -150,9 +150,11 @@ class TestGraphConstruction:
 
     def test_node_count(self):
         graph = build_backend_graph(checkpointer=MemorySaver())
-        # 14 real nodes + __start__ + __end__ = 16
+        # 16 real nodes + __start__ + __end__ = 18
+        # (added generate_wrapper between timing_signoff and mpw_precheck,
+        # and generate_3d_view between backend_complete and final_report)
         node_names = list(graph.get_graph().nodes.keys())
-        assert len(node_names) == 16
+        assert len(node_names) == 18
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -226,7 +228,9 @@ class TestRouteAfterLVS:
 
 class TestRouteAfterTiming:
     def test_met_goes_to_advance(self):
-        assert route_after_timing({"timing_result": {"met": True}}) == "advance_block"
+        # After timing_signoff MET -> generate_wrapper (was advance_block before
+        # the wrapper-generation step was inserted into the backend pipeline).
+        assert route_after_timing({"timing_result": {"met": True}}) == "generate_wrapper"
 
     def test_violated_goes_to_diagnose(self):
         assert route_after_timing({"timing_result": {"met": False}}) == "diagnose"

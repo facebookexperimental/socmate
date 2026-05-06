@@ -40,6 +40,16 @@ _SERVE_PATH = (
     Path(__file__).resolve().parents[1] / "vscode-ext" / "serve.py"
 )
 
+# The vscode-ext/serve.py webview server has been removed from the orchestrator
+# (replaced by a separate frontend stack). All tests in this file exercise that
+# server, so skip the entire module when serve.py is absent rather than letting
+# every test ERROR at fixture setup. Re-enable if/when the webview server returns.
+if not _SERVE_PATH.exists():
+    pytest.skip(
+        "orchestrator/vscode-ext/serve.py removed; webview server tests obsolete",
+        allow_module_level=True,
+    )
+
 
 def _import_serve(project_root: Path):
     """Import serve.py via importlib from its file path, with PROJECT_ROOT

@@ -68,6 +68,7 @@ from orchestrator.utils import smart_truncate
 from orchestrator.langgraph.integration_helpers import (
     discover_block_rtl,
     generate_integration_testbench,
+    lint_top_level,
     load_architecture_connections,
     parse_verilog_ports,
     run_integration_simulation,
@@ -2158,7 +2159,6 @@ async def integration_check_node(state: OrchestratorState) -> dict:
             log(f"  [INTEGRATION] Single-block design: generated wrapper "
                 f"{top_name} for {solo_name}", GREEN)
 
-            from orchestrator.langgraph.integration_helpers import lint_top_level
             solo_rtl_path = list(rtl_paths.values())[0]
             lint_result = await asyncio.to_thread(
                 lint_top_level, output_path, [solo_rtl_path], top_name

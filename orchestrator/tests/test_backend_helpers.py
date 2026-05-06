@@ -228,8 +228,17 @@ class TestParseDrcReport:
         assert r["violation_count"] == 0
 
     def test_violations(self, tmp_path):
+        # parse_drc_report extracts violations from Magic's
+        # ``{rule_name} {coords} ...`` syntax -- the rule name is in the
+        # first set of braces followed immediately by another `{`.
         rpt = tmp_path / "drc.rpt"
-        rpt.write_text("Design: test\nDRC count: 3\nvia spacing\nmetal width\nenclosure\n")
+        rpt.write_text(
+            "Design: test\n"
+            "DRC count: 3\n"
+            "{via spacing} {0 0 1 1}\n"
+            "{metal width} {2 2 3 3}\n"
+            "{enclosure} {4 4 5 5}\n"
+        )
         r = parse_drc_report(str(rpt))
         assert r["clean"] is False
         assert r["violation_count"] == 3
@@ -296,7 +305,10 @@ class TestToolResolution:
         assert NETGEN_BIN.endswith("netgen-nix.sh")
         assert Path(NETGEN_BIN).exists()
 
+    @pytest.mark.requires_nix
     def test_pdk_files_exist(self):
+        # PDK files (Sky130) are provisioned by the Nix-based dev environment;
+        # CI runners that don't have Nix on PATH won't have them either.
         assert TECH_LEF.exists(), f"Tech LEF not found: {TECH_LEF}"
         assert CELL_LEF.exists(), f"Cell LEF not found: {CELL_LEF}"
         assert LIBERTY.exists(), f"Liberty not found: {LIBERTY}"

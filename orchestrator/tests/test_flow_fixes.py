@@ -315,12 +315,30 @@ class TestDiscoverBlockPorts:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestFastPathDiagnosis:
-    """Verify fast-path diagnosis catches known testbench bugs."""
+    """Verify fast-path diagnosis catches known testbench bugs.
+
+    The current ``diagnose_node`` reads its error context from
+    ``.socmate/blocks/<block>/previous_error.txt`` (written by the
+    upstream sim/lint nodes) and persists the diag dict to
+    ``diagnosis.json`` in the same directory.  It returns only
+    ``{"debug_action": ...}`` -- the diag dict is fetched from disk.
+    """
+
+    @staticmethod
+    def _setup_block(tmp_path, block_name, error_text):
+        block_dir = tmp_path / ".socmate" / "blocks" / block_name
+        block_dir.mkdir(parents=True, exist_ok=True)
+        (block_dir / "previous_error.txt").write_text(error_text)
+        return block_dir
 
     @pytest.mark.asyncio
-    async def test_attribute_error_detected(self):
+    async def test_attribute_error_detected(self, tmp_path):
         from orchestrator.langgraph.pipeline_graph import diagnose_node
 
+        block_dir = self._setup_block(
+            tmp_path, "test_block",
+            "AttributeError: 'test_block' object has no attribute 'clk'\nTraceback ...",
+        )
         state = {
             "current_block": {"name": "test_block"},
             "attempt": 1,
@@ -329,26 +347,26 @@ class TestFastPathDiagnosis:
             "constraints": [],
             "phase": "sim",
             "previous_error": "",
-            "project_root": "/tmp/test",
-            "sim_result": {
-                "passed": False,
-                "log": "AttributeError: 'test_block' object has no attribute 'clk'\n"
-                       "Traceback ...",
-            },
+            "project_root": str(tmp_path),
             "rtl_result": {"verilog": "module test_block(); endmodule"},
             "uarch_spec": None,
         }
 
         result = await diagnose_node(state)
-        diag = result["debug_result"]
+        assert result.get("debug_action") == "retry_tb"
+        diag = json.loads((block_dir / "diagnosis.json").read_text())
         assert diag["category"] == "TESTBENCH_BUG"
         assert diag["is_testbench_bug"] is True
         assert diag["confidence"] == 1.0
 
     @pytest.mark.asyncio
-    async def test_module_not_found_detected(self):
+    async def test_module_not_found_detected(self, tmp_path):
         from orchestrator.langgraph.pipeline_graph import diagnose_node
 
+        block_dir = self._setup_block(
+            tmp_path, "test_block",
+            "ModuleNotFoundError: No module named 'test_block_model'",
+        )
         state = {
             "current_block": {"name": "test_block"},
             "attempt": 1,
@@ -357,24 +375,25 @@ class TestFastPathDiagnosis:
             "constraints": [],
             "phase": "sim",
             "previous_error": "",
-            "project_root": "/tmp/test",
-            "sim_result": {
-                "passed": False,
-                "log": "ModuleNotFoundError: No module named 'test_block_model'",
-            },
+            "project_root": str(tmp_path),
             "rtl_result": {"verilog": "module test_block(); endmodule"},
             "uarch_spec": None,
         }
 
         result = await diagnose_node(state)
-        diag = result["debug_result"]
+        assert result.get("debug_action") == "retry_tb"
+        diag = json.loads((block_dir / "diagnosis.json").read_text())
         assert diag["category"] == "TESTBENCH_BUG"
         assert diag["is_testbench_bug"] is True
 
     @pytest.mark.asyncio
-    async def test_lint_module_not_found(self):
+    async def test_lint_module_not_found(self, tmp_path):
         from orchestrator.langgraph.pipeline_graph import diagnose_node
 
+        block_dir = self._setup_block(
+            tmp_path, "test_block",
+            "%Error: Module not found: test_block",
+        )
         state = {
             "current_block": {"name": "test_block"},
             "attempt": 1,
@@ -383,25 +402,26 @@ class TestFastPathDiagnosis:
             "constraints": [],
             "phase": "lint",
             "previous_error": "",
-            "project_root": "/tmp/test",
-            "lint_result": {
-                "clean": False,
-                "errors": "%Error: Module not found: test_block",
-            },
+            "project_root": str(tmp_path),
             "rtl_result": {"verilog": ""},
             "uarch_spec": None,
         }
 
         result = await diagnose_node(state)
-        diag = result["debug_result"]
+        assert "debug_action" in result
+        diag = json.loads((block_dir / "diagnosis.json").read_text())
         assert diag["category"] == "INFRASTRUCTURE_ERROR"
 
     @pytest.mark.asyncio
-    async def test_non_matching_error_falls_through(self):
+    async def test_non_matching_error_falls_through(self, tmp_path):
         """Verify that non-matching errors are NOT fast-pathed (would need LLM)."""
         from orchestrator.langgraph.pipeline_graph import diagnose_node
         from unittest.mock import patch, AsyncMock
 
+        block_dir = self._setup_block(
+            tmp_path, "test_block",
+            "AssertionError: output mismatch at cycle 42: expected 0xFF got 0x00",
+        )
         state = {
             "current_block": {"name": "test_block"},
             "attempt": 1,
@@ -410,11 +430,7 @@ class TestFastPathDiagnosis:
             "constraints": [],
             "phase": "sim",
             "previous_error": "",
-            "project_root": "/tmp/test",
-            "sim_result": {
-                "passed": False,
-                "log": "AssertionError: output mismatch at cycle 42: expected 0xFF got 0x00",
-            },
+            "project_root": str(tmp_path),
             "rtl_result": {"verilog": "module test_block(); endmodule"},
             "uarch_spec": None,
         }
@@ -436,7 +452,9 @@ class TestFastPathDiagnosis:
 
         # The LLM should have been called (fast-path didn't match)
         mock_diag.assert_called_once()
-        assert result["debug_result"]["category"] == "LOGIC_ERROR"
+        assert "debug_action" in result
+        diag = json.loads((block_dir / "diagnosis.json").read_text())
+        assert diag["category"] == "LOGIC_ERROR"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -710,9 +728,13 @@ class TestRegressionGuard:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestBestResultPersistence:
+    """``simulate_node`` was merged into ``generate_testbench_node``; the
+    sim-pass / sim-fail persistence behaviour is exercised through the
+    combined node now."""
+
     @pytest.mark.asyncio
     async def test_sim_pass_writes_best_result(self, tmp_path):
-        from orchestrator.langgraph.pipeline_graph import simulate_node
+        from orchestrator.langgraph.pipeline_graph import generate_testbench_node
         from unittest.mock import patch
 
         block_name = "my_alu"
@@ -736,15 +758,17 @@ class TestBestResultPersistence:
             "attempt": 1,
             "rtl_path": str(rtl_file),
             "tb_path": str(tb_file),
+            # preserve_testbench=True keeps the existing TB file and skips
+            # the (mocked-out) generate_testbench LLM call.
             "force_regen_tb": False,
-            "preserve_testbench": False,
+            "preserve_testbench": True,
         }
 
         with patch(
             "orchestrator.langgraph.pipeline_graph.run_simulation",
             return_value=sim_pass,
         ):
-            await simulate_node(state)
+            await generate_testbench_node(state)
 
         best_path = tmp_path / ".socmate" / "blocks" / block_name / "best_result.json"
         assert best_path.exists()
@@ -755,7 +779,7 @@ class TestBestResultPersistence:
 
     @pytest.mark.asyncio
     async def test_sim_fail_no_best_result(self, tmp_path):
-        from orchestrator.langgraph.pipeline_graph import simulate_node
+        from orchestrator.langgraph.pipeline_graph import generate_testbench_node
         from unittest.mock import patch
 
         block_name = "buggy"
@@ -779,14 +803,14 @@ class TestBestResultPersistence:
             "rtl_path": str(rtl_file),
             "tb_path": str(tb_file),
             "force_regen_tb": False,
-            "preserve_testbench": False,
+            "preserve_testbench": True,
         }
 
         with patch(
             "orchestrator.langgraph.pipeline_graph.run_simulation",
             return_value=sim_fail,
         ):
-            await simulate_node(state)
+            await generate_testbench_node(state)
 
         best_path = tmp_path / ".socmate" / "blocks" / block_name / "best_result.json"
         assert not best_path.exists()
