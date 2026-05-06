@@ -88,8 +88,15 @@ sys.exit(0 if r['ok'] else 1)
 
 case "${mode}" in
     shell)
+        # If extra args were passed (e.g. `docker run image bash -lc '...'`),
+        # exec them directly rather than wrapping in another bash. This
+        # also avoids the openlane2 base's missing /bin/bash hardlink --
+        # we let exec resolve via PATH (Nix-store bash is on it).
+        if [[ $# -gt 0 ]]; then
+            exec "$@"
+        fi
         echo "[socmate] dropping into bash. Try: make help"
-        exec /bin/bash "$@"
+        exec bash
         ;;
 
     pipeline)
