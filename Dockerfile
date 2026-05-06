@@ -32,7 +32,7 @@
 # and the Sky130 PDK pinned at known-good versions, plus a working tcl/tk env.
 # We layer Python 3.11, Verilator, cocotb, Node + Claude CLI on top.
 # -----------------------------------------------------------------------------
-FROM efabless/openlane:2024.10.18 AS socmate
+FROM efabless/openlane:1.0.0 AS socmate
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_MAJOR=20
