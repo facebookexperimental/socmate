@@ -28,44 +28,45 @@
 #     socmate:latest
 
 # -----------------------------------------------------------------------------
-# Base: hpretl/iic-osic-tools is an Ubuntu image bundling Yosys, OpenROAD,
-# Magic, netgen, KLayout, Verilator, ngspice, xschem (plus the Sky130 +
-# gf180mcu PDKs) at maintained pins. We layer Python 3.11, the orchestrator
-# venv, Node + Claude CLI on top, and override the VNC entrypoint with a
-# CLI one suited to Codespaces / RunPod.
+# Base: ghcr.io/efabless/openlane2 is a Nix-built image (~1.5 GB compressed)
+# that bundles Yosys, OpenROAD, Magic, netgen, KLayout, Verilator, iverilog
+# and OpenSTA already on PATH, plus a Python 3.11 environment. We layer
+# Node + the Claude CLI on top via the official Node tarball (the image has
+# no apt) and a per-project venv for the orchestrator deps.
+#
+# Why not the IIC-OSIC-TOOLS or efabless/openlane:1.x image? They're 5 GB+
+# compressed, ~15 GB extracted, and overflow the 32 GB Codespaces disk
+# during `docker buildx build` -- the build then falls through to the
+# alpine recovery container.
 # -----------------------------------------------------------------------------
-FROM hpretl/iic-osic-tools:2026.04 AS socmate
+FROM ghcr.io/efabless/openlane2:2.3.10 AS socmate
 
-ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_MAJOR=20
 
-# IIC-OSIC-TOOLS runs as UID 1000 with a VNC entrypoint; root is needed for
-# the apt installs below and we override the entrypoint at the bottom.
-USER root
+# The image already runs as root with /nix/store on PATH, so we don't need
+# USER/WORKDIR juggling. We *do* need Node + git + curl on PATH; openlane2
+# bundles git and curl already, so only Node is missing.
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl git gnupg make sudo software-properties-common \
- && add-apt-repository -y ppa:deadsnakes/ppa \
- && apt-get update && apt-get install -y --no-install-recommends \
-        python3.11 python3.11-venv python3.11-dev python3-pip \
-        verilator \
- && curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
- && apt-get install -y --no-install-recommends nodejs \
- && rm -rf /var/lib/apt/lists/*
+# Node.js from the official Linux x64 tarball (Nix-based image has no apt).
+# /usr/local/bin is on PATH ahead of /nix/store entries, so the symlinks
+# below win for the Claude CLI.
+RUN ARCH="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')" \
+ && NODE_VERSION="$(curl -fsSL https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/SHASUMS256.txt | awk '/linux-'"${ARCH}"'\.tar\.xz/ {sub(/.*node-/,"node-"); sub(/-linux.*/,""); print; exit}')" \
+ && curl -fsSL "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/${NODE_VERSION}-linux-${ARCH}.tar.xz" \
+        | tar -xJ -C /opt/ \
+ && for bin in node npm npx corepack; do \
+        ln -sf "/opt/${NODE_VERSION}-linux-${ARCH}/bin/${bin}" "/usr/local/bin/${bin}"; \
+    done
 
 RUN npm install -g @anthropic-ai/claude-code
 
-# IIC-OSIC-TOOLS symlinks every EDA binary into /foss/tools/bin/ via its
-# install_links.sh; putting that on PATH gives `yosys`, `openroad`, `magic`,
-# `netgen`, `klayout` (and friends) at the bare names config.yaml expects.
-ENV PATH="/foss/tools/bin:${PATH}"
-
 # -----------------------------------------------------------------------------
 # Python venv + socmate deps. Done in two layers so a code-only edit
-# doesn't bust the dependency cache.
+# doesn't bust the dependency cache. The base image's python3 is 3.11.9 so
+# we use it directly (no deadsnakes / system Python dance).
 # -----------------------------------------------------------------------------
 ENV VIRTUAL_ENV=/opt/socmate-venv
-RUN python3.11 -m venv "${VIRTUAL_ENV}"
+RUN python3 -m venv "${VIRTUAL_ENV}"
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
 WORKDIR /socmate
@@ -93,9 +94,10 @@ RUN pip install volare \
         "${SKY130_PDK_COMMIT}"
 
 # -----------------------------------------------------------------------------
-# Tool wrappers: inside the container the EDA tools are on $PATH (provided by
-# the IIC-OSIC-TOOLS base image), so the scripts/*-nix.sh wrappers just need
-# to exec the real binary. We override config.yaml to point at bare names.
+# Tool wrappers: openlane2 already exposes yosys / openroad / magic / netgen
+# / klayout / verilator at the bare names on $PATH, so the scripts/*-nix.sh
+# wrappers just need to exec the real binary. We override config.yaml to
+# point at bare names.
 # -----------------------------------------------------------------------------
 RUN python3 -c "import yaml, pathlib; \
 p = pathlib.Path('orchestrator/config.yaml'); \

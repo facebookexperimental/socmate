@@ -10,9 +10,9 @@
         "context": ".."
     },
 
-    // IIC-OSIC-TOOLS defaults to UID 1000 with a VNC entrypoint; the
-    // socmate Dockerfile overrides both, but the dev container still needs
-    // root so the entrypoint can write under /socmate/.socmate, /rtl, etc.
+    // The openlane2 base image already runs as root with /nix/store on
+    // PATH; keep the dev container as root so the entrypoint can write
+    // under /socmate/.socmate, /rtl, etc.
     "remoteUser": "root",
     "containerUser": "root",
 
