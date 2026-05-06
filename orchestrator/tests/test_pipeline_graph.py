@@ -199,7 +199,7 @@ class TestGraphConstruction:
             "init_block", "generate_uarch_spec", "review_uarch_spec",
             "generate_rtl", "lint", "generate_testbench",
             "simulate", "synthesize", "diagnose", "decide", "ask_human",
-            "increment_attempt", "block_done",
+            "block_done",
         ]
         for name in expected:
             assert name in node_names, f"Missing block subgraph node: {name}"
@@ -282,9 +282,13 @@ class TestRouteAfterSim:
     pass
 
 
+# NOTE: route_decision and route_after_human now route directly to the
+# next stage (generate_rtl, generate_testbench, ...) instead of going
+# through an explicit increment_attempt indirection. The assertions
+# below reflect the post-inlining mapping defined in pipeline_graph.py.
 class TestRouteDecision:
     def test_retry_rtl(self):
-        assert route_decision({"debug_action": "retry_rtl"}) == "increment_attempt"
+        assert route_decision({"debug_action": "retry_rtl"}) == "generate_rtl"
 
     def test_retry_tb(self):
         assert route_decision({"debug_action": "retry_tb"}) == "generate_testbench"
@@ -295,22 +299,22 @@ class TestRouteDecision:
     def test_escalate(self):
         assert route_decision({"debug_action": "escalate"}) == "block_done"
 
-    def test_default_is_increment(self):
-        assert route_decision({"debug_action": "??"}) == "increment_attempt"
+    def test_default_routes_to_generate_rtl(self):
+        assert route_decision({"debug_action": "??"}) == "generate_rtl"
 
-    def test_missing_action_defaults_to_increment(self):
-        assert route_decision({}) == "increment_attempt"
+    def test_missing_action_defaults_to_generate_rtl(self):
+        assert route_decision({}) == "generate_rtl"
 
 
 class TestRouteAfterHuman:
     def test_retry(self):
-        assert route_after_human({"human_response": {"action": "retry"}}) == "increment_attempt"
+        assert route_after_human({"human_response": {"action": "retry"}}) == "generate_rtl"
 
     def test_fix_rtl(self):
-        assert route_after_human({"human_response": {"action": "fix_rtl"}}) == "lint"
+        assert route_after_human({"human_response": {"action": "fix_rtl"}}) == "generate_rtl"
 
     def test_add_constraint(self):
-        assert route_after_human({"human_response": {"action": "add_constraint"}}) == "increment_attempt"
+        assert route_after_human({"human_response": {"action": "add_constraint"}}) == "generate_rtl"
 
     def test_skip(self):
         assert route_after_human({"human_response": {"action": "skip"}}) == "block_done"
@@ -318,11 +322,11 @@ class TestRouteAfterHuman:
     def test_abort(self):
         assert route_after_human({"human_response": {"action": "abort"}}) == "block_done"
 
-    def test_default_is_increment(self):
-        assert route_after_human({"human_response": {"action": "??"}}) == "increment_attempt"
+    def test_default_routes_to_generate_rtl(self):
+        assert route_after_human({"human_response": {"action": "??"}}) == "generate_rtl"
 
-    def test_missing_response_defaults_to_increment(self):
-        assert route_after_human({}) == "increment_attempt"
+    def test_missing_response_defaults_to_generate_rtl(self):
+        assert route_after_human({}) == "generate_rtl"
 
 
 @pytest.mark.skip(
@@ -1221,34 +1225,40 @@ class TestRouteAfterHumanEscapes:
 
     These cover actions that are valid for other interrupt types (like
     uarch_spec_review) but NOT valid for ask_human.  When such actions
-    reach route_after_human, they silently default to increment_attempt,
+    reach route_after_human, they silently default to generate_rtl,
     causing unintended re-execution.  The defense is upstream in
     _build_resume_command (type-aware validation).
+
+    Post-refactor note: the default landing used to be ``increment_attempt``;
+    that node was inlined and the default now flows directly to
+    ``generate_rtl``. The bug-class these tests cover is unchanged.
     """
 
-    def test_approve_is_not_valid_defaults_to_increment(self):
+    def test_approve_is_not_valid_defaults_to_generate_rtl(self):
         """approve is for uarch_spec_review, not ask_human.
 
         If _build_resume_command sends approve to an ask_human interrupt,
-        route_after_human defaults to increment_attempt, causing the block
-        to silently re-enter generate_rtl.
+        route_after_human defaults to generate_rtl, causing the block
+        to silently re-enter RTL generation.
         """
         result = route_after_human({"human_response": {"action": "approve"}})
-        assert result == "increment_attempt"
+        assert result == "generate_rtl"
 
-    def test_revise_is_not_valid_defaults_to_increment(self):
+    def test_revise_is_not_valid_defaults_to_generate_rtl(self):
         """revise is for uarch_spec_review, not ask_human."""
         result = route_after_human({"human_response": {"action": "revise"}})
-        assert result == "increment_attempt"
+        assert result == "generate_rtl"
 
     def test_all_valid_actions_are_mapped(self):
         """Verify all supported ask_human actions have explicit mappings."""
         valid_ask_human_actions = {"retry", "fix_rtl", "add_constraint", "skip", "abort"}
+        terminal = {"skip", "abort"}
         for action in valid_ask_human_actions:
             result = route_after_human({"human_response": {"action": action}})
-            assert result != "increment_attempt" or action in ("retry", "add_constraint"), (
-                f"Action '{action}' should have a non-default mapping"
-            )
+            if action in terminal:
+                assert result == "block_done", f"{action} should land on block_done"
+            else:
+                assert result == "generate_rtl", f"{action} should retry into generate_rtl"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
