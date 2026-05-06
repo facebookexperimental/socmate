@@ -42,19 +42,20 @@
 FROM ghcr.io/efabless/openlane2:2.3.10 AS socmate
 
 # The image already runs as root with /nix/store on PATH, so we don't need
-# USER/WORKDIR juggling. We *do* need Node + git + curl on PATH; openlane2
-# bundles git and curl already, so only Node is missing.
+# USER/WORKDIR juggling. We *do* need Node + npm for the Claude CLI;
+# openlane2 doesn't bundle Node, so we install via the image's bundled
+# Nix (a multi-stage COPY from node:20-slim doesn't work because that
+# binary needs /lib/x86_64-linux-gnu/libc.so.6 which the Nix-only base
+# doesn't provide).
+#
+# `nix-env -iA nixpkgs.nodejs_20` installs into /root/.nix-profile/bin;
+# we add a channel first because the openlane2 image is built declaratively
+# without a default `nixpkgs` user channel.
+RUN nix-channel --add https://nixos.org/channels/nixos-24.05 nixpkgs \
+ && nix-channel --update \
+ && nix-env -iA nixpkgs.nodejs_20
 
-# Node.js + npm pulled in from the official node:20-slim image. The
-# openlane2 base is Nix-built with no apt and a sparse /usr/bin (no awk /
-# tar -J), so a tarball download doesn't work; multi-stage COPY does.
-# /usr/local/bin isn't on the base image's PATH, so add it explicitly.
-COPY --from=node:20-slim /usr/local/bin/node /usr/local/bin/node
-COPY --from=node:20-slim /usr/local/include/node /usr/local/include/node
-COPY --from=node:20-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
-RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
- && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
-ENV PATH="/usr/local/bin:${PATH}"
+ENV PATH="/root/.nix-profile/bin:${PATH}"
 
 RUN npm install -g @anthropic-ai/claude-code
 
