@@ -10,8 +10,9 @@
         "context": ".."
     },
 
-    // The OpenLane base image runs as UID 1000; keep that so /socmate paths
-    // inside the container match the entrypoint script's expectations.
+    // The openlane2 base image already runs as root with /nix/store on
+    // PATH; keep the dev container as root so the entrypoint can write
+    // under /socmate/.socmate, /rtl, etc.
     "remoteUser": "root",
     "containerUser": "root",
 

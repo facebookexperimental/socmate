@@ -28,34 +28,44 @@
 #     socmate:latest
 
 # -----------------------------------------------------------------------------
-# Base: efabless/openlane already has OpenROAD, Magic, netgen, KLayout, Yosys,
-# and the Sky130 PDK pinned at known-good versions, plus a working tcl/tk env.
-# We layer Python 3.11, Verilator, cocotb, Node + Claude CLI on top.
+# Base: ghcr.io/efabless/openlane2 is a Nix-built image (~1.5 GB compressed)
+# that bundles Yosys, OpenROAD, Magic, netgen, KLayout, Verilator, iverilog
+# and OpenSTA already on PATH, plus a Python 3.11 environment. We layer
+# Node + the Claude CLI on top via the official Node tarball (the image has
+# no apt) and a per-project venv for the orchestrator deps.
+#
+# Why not the IIC-OSIC-TOOLS or efabless/openlane:1.x image? They're 5 GB+
+# compressed, ~15 GB extracted, and overflow the 32 GB Codespaces disk
+# during `docker buildx build` -- the build then falls through to the
+# alpine recovery container.
 # -----------------------------------------------------------------------------
-FROM efabless/openlane:1.0.0 AS socmate
+FROM ghcr.io/efabless/openlane2:2.3.10 AS socmate
 
-ARG DEBIAN_FRONTEND=noninteractive
-ARG NODE_MAJOR=20
+# The image already runs as root with /nix/store on PATH, so we don't need
+# USER/WORKDIR juggling. We *do* need Node + npm for the Claude CLI;
+# openlane2 doesn't bundle Node, so we install via the image's bundled
+# Nix (a multi-stage COPY from node:20-slim doesn't work because that
+# binary needs /lib/x86_64-linux-gnu/libc.so.6 which the Nix-only base
+# doesn't provide).
+#
+# `nix-env -iA nixpkgs.nodejs_20` installs into /root/.nix-profile/bin;
+# we add a channel first because the openlane2 image is built declaratively
+# without a default `nixpkgs` user channel.
+RUN nix-channel --add https://nixos.org/channels/nixos-24.05 nixpkgs \
+ && nix-channel --update \
+ && nix-env -iA nixpkgs.nodejs_20
 
-# OpenLane's image is non-root (UID 1000); the apt-get steps below need root.
-USER root
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl git gnupg make sudo \
-        python3.11 python3.11-venv python3-pip \
-        verilator \
-    && curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
+ENV PATH="/root/.nix-profile/bin:${PATH}"
 
 RUN npm install -g @anthropic-ai/claude-code
 
 # -----------------------------------------------------------------------------
 # Python venv + socmate deps. Done in two layers so a code-only edit
-# doesn't bust the dependency cache.
+# doesn't bust the dependency cache. The base image's python3 is 3.11.9 so
+# we use it directly (no deadsnakes / system Python dance).
 # -----------------------------------------------------------------------------
 ENV VIRTUAL_ENV=/opt/socmate-venv
-RUN python3.11 -m venv "${VIRTUAL_ENV}"
+RUN python3 -m venv "${VIRTUAL_ENV}"
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
 WORKDIR /socmate
@@ -83,9 +93,10 @@ RUN pip install volare \
         "${SKY130_PDK_COMMIT}"
 
 # -----------------------------------------------------------------------------
-# Tool wrappers: inside the container the EDA tools are on $PATH (provided by
-# the openlane base image), so the scripts/*-nix.sh wrappers just need to
-# exec the real binary. We override config.yaml to point at bare names.
+# Tool wrappers: openlane2 already exposes yosys / openroad / magic / netgen
+# / klayout / verilator at the bare names on $PATH, so the scripts/*-nix.sh
+# wrappers just need to exec the real binary. We override config.yaml to
+# point at bare names.
 # -----------------------------------------------------------------------------
 RUN python3 -c "import yaml, pathlib; \
 p = pathlib.Path('orchestrator/config.yaml'); \
