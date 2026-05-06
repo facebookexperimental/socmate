@@ -53,7 +53,7 @@ FROM ghcr.io/efabless/openlane2:2.3.10 AS socmate
 # without a default `nixpkgs` user channel.
 RUN nix-channel --add https://nixos.org/channels/nixos-24.05 nixpkgs \
  && nix-channel --update \
- && nix-env -iA nixpkgs.nodejs_20
+ && nix-env -iA nixpkgs.nodejs_20 nixpkgs.gnumake
 
 ENV PATH="/root/.nix-profile/bin:${PATH}"
 
