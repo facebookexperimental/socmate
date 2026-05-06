@@ -48,11 +48,13 @@ FROM ghcr.io/efabless/openlane2:2.3.10 AS socmate
 # Node.js + npm pulled in from the official node:20-slim image. The
 # openlane2 base is Nix-built with no apt and a sparse /usr/bin (no awk /
 # tar -J), so a tarball download doesn't work; multi-stage COPY does.
+# /usr/local/bin isn't on the base image's PATH, so add it explicitly.
 COPY --from=node:20-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=node:20-slim /usr/local/include/node /usr/local/include/node
 COPY --from=node:20-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+ENV PATH="/usr/local/bin:${PATH}"
 
 RUN npm install -g @anthropic-ai/claude-code
 
