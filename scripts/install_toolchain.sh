@@ -128,6 +128,62 @@ install_riscv_toolchain() {
 }
 
 # --------------------------------------------------------------------------
+# 6a. OSS-CAD-Suite (newer yosys + verilator 5; only on Linux when apt's
+#     versions are too old to run the pipeline)
+# --------------------------------------------------------------------------
+install_oss_cad_suite_if_needed() {
+    if [[ "$OS" != "Linux" ]]; then
+        return 0
+    fi
+
+    local need_install=0
+    local vv
+    if command -v verilator &>/dev/null; then
+        vv="$(verilator --version 2>&1 | grep -oE 'Verilator [0-9]+\.[0-9]+' | awk '{print $2}')"
+        if [[ -n "$vv" ]] && awk -v v="$vv" 'BEGIN{exit !(v+0 < 5.0)}'; then
+            need_install=1
+        fi
+    else
+        need_install=1
+    fi
+
+    if [[ "$need_install" -eq 0 ]]; then
+        return 0
+    fi
+
+    echo ""
+    echo "--- Installing OSS-CAD-Suite (apt-installed verilator $vv is too old) ---"
+
+    local install_dir="${OSS_CAD_SUITE_ROOT:-/opt/oss-cad-suite}"
+    if [[ -x "${install_dir}/bin/verilator" ]]; then
+        echo "OSS-CAD-Suite already at ${install_dir}; reusing."
+    else
+        # Fetch the latest release URL via GitHub's redirect (no jq dep).
+        local release_url
+        release_url="$(curl -sIL https://github.com/YosysHQ/oss-cad-suite-build/releases/latest \
+                       | grep -i '^location:' | tail -1 \
+                       | awk '{print $2}' | tr -d '\r\n')"
+        local release_tag="${release_url##*/}"
+        # Tag format is YYYY-MM-DD; the asset filename is YYYYMMDD with no dashes.
+        local asset_date="${release_tag//-/}"
+        local asset_url="https://github.com/YosysHQ/oss-cad-suite-build/releases/download/${release_tag}/oss-cad-suite-linux-x64-${asset_date}.tgz"
+
+        echo "Downloading ${asset_url} (~700 MB)..."
+        sudo mkdir -p "$(dirname "$install_dir")"
+        sudo curl -L --fail -o "/tmp/oss-cad-suite.tgz" "$asset_url"
+        echo "Extracting to ${install_dir}..."
+        sudo tar -xzf /tmp/oss-cad-suite.tgz -C "$(dirname "$install_dir")"
+        rm -f /tmp/oss-cad-suite.tgz
+    fi
+
+    # Prepend the suite to PATH for subsequent steps and verify().
+    export PATH="${install_dir}/bin:${PATH}"
+    echo "OSS-CAD-Suite ready at ${install_dir}; PATH updated for this session."
+    echo "To pick it up in new shells, add to your ~/.bashrc:"
+    echo "  source ${install_dir}/environment"
+}
+
+# --------------------------------------------------------------------------
 # 6. Verify installations
 # --------------------------------------------------------------------------
 verify() {
@@ -183,6 +239,7 @@ verify() {
 # Main
 # --------------------------------------------------------------------------
 install_system_deps
+install_oss_cad_suite_if_needed
 setup_python_env
 install_sky130
 install_openlane

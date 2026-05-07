@@ -60,6 +60,32 @@ LIBERTY_FILE = _find_liberty_file()
 # Preflight check -- validate PDK/EDA tools before burning retry budgets
 # ---------------------------------------------------------------------------
 
+
+def _verilator_version() -> tuple[int, int] | None:
+    """Return (major, minor) for `verilator --version`, or None if it can't
+    be parsed. Used by preflight_check to guard against the Ubuntu-22.04
+    apt build (4.038) which is too old for socmate's lint flags.
+    """
+    try:
+        out = subprocess.run(
+            ["verilator", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        ).stdout
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return None
+    # Expected first-line shape: "Verilator 5.049 devel rev v5.048-37-..."
+    # or "Verilator 4.038 2020-07-11 ..." for the apt build.
+    import re
+    m = re.search(r"Verilator\s+(\d+)\.(\d+)", out)
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)))
+
+
+
 def preflight_check(phases: list[str] | None = None) -> dict:
     """Validate that required PDK files and EDA tools exist.
 
@@ -81,6 +107,20 @@ def preflight_check(phases: list[str] | None = None) -> dict:
             errors.append(f"Liberty file not found: {LIBERTY_FILE}")
         if not shutil.which("verilator"):
             errors.append("verilator not found on PATH")
+        else:
+            # The lint step uses Verilator-5-only flags (e.g. -Wno-EOFNEWLINE).
+            # Apt on Ubuntu 22.04 ships 4.038, which silently passes the
+            # "binary on PATH" check and then fails the very first lint with
+            # "Unknown warning specified". Gate on >= 5.0 here so the user
+            # learns about the upgrade before burning a pipeline run.
+            ver = _verilator_version()
+            if ver is not None and ver < (5, 0):
+                errors.append(
+                    f"verilator version {'.'.join(str(p) for p in ver)} "
+                    f"is too old (need >= 5.0). Install OSS-CAD-Suite "
+                    "(https://github.com/YosysHQ/oss-cad-suite-build/releases/latest) "
+                    "or build verilator from source."
+                )
         if not shutil.which("yosys"):
             errors.append("yosys not found on PATH")
         if not PDK_ROOT.exists():
