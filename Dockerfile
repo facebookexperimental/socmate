@@ -65,6 +65,17 @@ ENV PATH="/root/.nix-profile/bin:${PATH}"
 # explicitly put on PATH so global installs are actually usable.
 ENV NPM_CONFIG_PREFIX=/opt/npm-global
 ENV PATH="/opt/npm-global/bin:${PATH}"
+
+# The openlane2 nix base doesn't ship the standard /usr/bin/env, so
+# scripts whose shebang is `#!/usr/bin/env node` (which is what
+# `claude` from npm uses) fail to exec with "required file not found"
+# even when both env and node are present further up in PATH. Symlink
+# from the nix profile to the conventional location, idempotently.
+RUN if [ ! -e /usr/bin/env ]; then \
+        mkdir -p /usr/bin && \
+        ln -s "$(command -v env)" /usr/bin/env; \
+    fi
+
 RUN mkdir -p /opt/npm-global \
  && npm install -g @anthropic-ai/claude-code
 
