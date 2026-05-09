@@ -57,7 +57,16 @@ RUN nix-channel --add https://nixos.org/channels/nixos-24.05 nixpkgs \
 
 ENV PATH="/root/.nix-profile/bin:${PATH}"
 
-RUN npm install -g @anthropic-ai/claude-code
+# Nix-built Node sets npm's default prefix into the read-only Nix store,
+# so `npm install -g` "succeeds" (the package extracts) but the bin
+# symlink can't land anywhere on PATH -- `which claude` then comes back
+# empty, the orchestrator Popens cmd[0]="" and the pipeline crashes
+# deep inside generate_uarch_spec. Pin the prefix to a writable dir we
+# explicitly put on PATH so global installs are actually usable.
+ENV NPM_CONFIG_PREFIX=/opt/npm-global
+ENV PATH="/opt/npm-global/bin:${PATH}"
+RUN mkdir -p /opt/npm-global \
+ && npm install -g @anthropic-ai/claude-code
 
 # Capture the resolved Claude CLI path at build time and bake it as
 # CLAUDE_CLI_PATH so runtime resolution can't drift if PATH changes
