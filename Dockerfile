@@ -109,8 +109,30 @@ RUN set -eux \
 # exits -- see runpod_entrypoint.sh's pipeline keep-alive). Host keys
 # are baked into the image; per-deploy authorized_keys is written by
 # the entrypoint from the PUBLIC_KEY env var.
-RUN mkdir -p /etc/ssh /var/run/sshd /run/sshd /root/.ssh \
+#
+# Three quirks of the openlane2 nix-only base we work around here:
+#   1. No `sshd` privsep user exists -- nix's openssh refuses to start
+#      without one ("Privilege separation user sshd does not exist").
+#      We add it via useradd; UsePrivilegeSeparation=no would also work
+#      but is deprecated in modern OpenSSH.
+#   2. No /bin/bash -- the openlane2 base ships only nix-store paths,
+#      so RunPod's `docker exec /bin/bash` (used by their SSH proxy
+#      and web terminal) fails. Symlink to the nix-store bash.
+#   3. /var/empty (the privsep chroot) must exist and be root-owned.
+RUN BASH_BIN="$(command -v bash)" \
+ && test -x "${BASH_BIN}" \
+ && ln -sf "${BASH_BIN}" /bin/bash \
+ && if ! getent passwd sshd >/dev/null 2>&1; then \
+        if command -v useradd >/dev/null 2>&1; then \
+            useradd -r -M -d /var/empty -s /usr/sbin/nologin sshd; \
+        else \
+            echo 'sshd:x:74:74:Privilege-separated SSH:/var/empty:/usr/sbin/nologin' >> /etc/passwd \
+         && echo 'sshd:x:74:' >> /etc/group; \
+        fi; \
+    fi \
+ && mkdir -p /etc/ssh /var/run/sshd /run/sshd /root/.ssh /var/empty \
  && chmod 700 /root/.ssh \
+ && chmod 755 /var/empty \
  && ssh-keygen -A \
  && { \
         echo "Port 22"; \
