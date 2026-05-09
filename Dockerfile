@@ -72,13 +72,16 @@ RUN MUSL_LD="$(find /nix/store -maxdepth 4 -name 'ld-musl-x86_64.so.1' \
 ENV NPM_CONFIG_PREFIX=/opt/npm-global
 ENV PATH="/opt/npm-global/bin:${PATH}"
 
-# Install the wrapper package + the Linux-x64-musl native variant
-# explicitly. Setting `--include=optional` and listing the musl
-# subpackage by name forces the right binary regardless of what
-# install.cjs's runtime detection thinks (Nix Node is glibc-built so
-# `process.report` would otherwise pick the glibc variant).
+# Install the wrapper package + the Linux-x64-musl native variant.
+# `--libc=musl` lies to npm's resolver about the host libc so it
+# accepts the musl subpackage (Nix Node is glibc-built, so npm would
+# otherwise reject it with EBADPLATFORM). `--force` is belt-and-braces
+# in case the resolver still complains. The wrapper's install.cjs
+# postinstall will still pick the glibc variant for bin/claude.exe
+# because it reads process.report.glibcVersionRuntime directly -- the
+# RUN below replaces that with a symlink to the musl binary.
 RUN mkdir -p /opt/npm-global \
- && npm install -g \
+ && npm install -g --force --libc=musl \
         @anthropic-ai/claude-code \
         @anthropic-ai/claude-code-linux-x64-musl
 
