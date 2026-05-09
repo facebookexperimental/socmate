@@ -28,7 +28,7 @@
 #     socmate:latest
 
 # -----------------------------------------------------------------------------
-# Base: efabless/openlane:2024.10.18 ships Yosys, OpenROAD, Magic, netgen,
+# Base: efabless/openlane:1.0.0 ships Yosys, OpenROAD, Magic, netgen,
 # KLayout and the Sky130 PDK on a Debian/Ubuntu userland (~5 GB compressed,
 # ~15 GB extracted). The Debian base matters: the npm-published Claude CLI
 # is now a Bun-compiled native ELF that expects a standard FHS dynamic
@@ -43,7 +43,7 @@
 # laptop. Codespaces users should pull the published image instead of
 # building from source, or use a larger Codespace machine.
 # -----------------------------------------------------------------------------
-FROM efabless/openlane:2024.10.18 AS socmate
+FROM efabless/openlane:1.0.0 AS socmate
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_MAJOR=20
