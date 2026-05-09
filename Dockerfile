@@ -53,42 +53,50 @@ FROM ghcr.io/efabless/openlane2:2.3.10 AS socmate
 # without a default `nixpkgs` user channel.
 RUN nix-channel --add https://nixos.org/channels/nixos-24.05 nixpkgs \
  && nix-channel --update \
- && nix-env -iA nixpkgs.nodejs_20 nixpkgs.gnumake nixpkgs.openssh
+ && nix-env -iA \
+        nixpkgs.nodejs_20 \
+        nixpkgs.gnumake \
+        nixpkgs.openssh \
+        nixpkgs.patchelf \
+        nixpkgs.gcc-unwrapped.lib
 
 ENV PATH="/root/.nix-profile/bin:${PATH}"
 
 # Nix-built Node sets npm's default prefix into the read-only Nix store,
 # so `npm install -g` "succeeds" (the package extracts) but the bin
-# symlink can't land anywhere on PATH -- `which claude` then comes back
-# empty, the orchestrator Popens cmd[0]="" and the pipeline crashes
-# deep inside generate_uarch_spec. Pin the prefix to a writable dir we
-# explicitly put on PATH so global installs are actually usable.
+# symlink can't land anywhere on PATH. Pin the prefix to a writable
+# dir we explicitly put on PATH so global installs are actually usable.
 ENV NPM_CONFIG_PREFIX=/opt/npm-global
 ENV PATH="/opt/npm-global/bin:${PATH}"
 
 RUN mkdir -p /opt/npm-global \
  && npm install -g @anthropic-ai/claude-code
 
-# Rewrite the npm-installed `claude` launcher's shebang to the absolute
-# path of the nix-profile node binary. The default `#!/usr/bin/env node`
-# shebang is fragile: the openlane2 nix base may not ship /usr/bin/env,
-# /usr/bin/env may be a stale symlink to a /nix/store path that no
-# longer exists, or env may not have node on its PATH at exec time. An
-# absolute interpreter path side-steps all of those.
+# `npm install -g @anthropic-ai/claude-code` ships a Bun-compiled
+# native ELF (claude.exe) on Linux x64, NOT a JS script. The openlane2
+# nix base has no /lib64/ld-linux-x86-64.so.2 at the FHS path, so any
+# alien ELF dies with the kernel's opaque "required file not found"
+# error before its main runs. Two fixes layered:
 #
-# `npm install -g` may create the bin as either a symlink to the
-# package's cli.js or as a small wrapper script -- handle both by
-# resolving the symlink first and rewriting the shebang on the actual
-# script we end up exec'ing.
+#   1. patchelf the binary's ELF interpreter and rpath to point at the
+#      nix-profile glibc + libstdc++/libgcc dirs.
+#   2. Symlink /lib64/ld-linux-x86-64.so.2 -> nix-profile loader, as a
+#      belt-and-suspenders for any other ELF that lands in this image.
 RUN set -eux \
- && NODE_BIN="$(command -v node)" \
- && CLAUDE_LINK="/opt/npm-global/bin/claude" \
+ && CLAUDE_LINK=/opt/npm-global/bin/claude \
  && CLAUDE_REAL="$(readlink -f "${CLAUDE_LINK}")" \
- && echo "node=${NODE_BIN}  claude_link=${CLAUDE_LINK}  claude_real=${CLAUDE_REAL}" \
- && test -f "${CLAUDE_REAL}" \
- && head -1 "${CLAUDE_REAL}" \
- && sed -i "1c#!${NODE_BIN}" "${CLAUDE_REAL}" \
- && head -1 "${CLAUDE_REAL}"
+ && GLIBC_LIBC="$(readlink -f /root/.nix-profile/lib/libc.so.6)" \
+ && GLIBC_DIR="$(dirname "${GLIBC_LIBC}")" \
+ && LD_LINUX="${GLIBC_DIR}/ld-linux-x86-64.so.2" \
+ && GCC_LIB_DIR="$(dirname "$(readlink -f /root/.nix-profile/lib/libstdc++.so.6 2>/dev/null || readlink -f /root/.nix-profile/lib/libgcc_s.so.1)")" \
+ && echo "claude_real=${CLAUDE_REAL}  ld=${LD_LINUX}  glibc_dir=${GLIBC_DIR}  gcc_dir=${GCC_LIB_DIR}" \
+ && test -e "${LD_LINUX}" \
+ && mkdir -p /lib64 \
+ && ln -sf "${LD_LINUX}" /lib64/ld-linux-x86-64.so.2 \
+ && patchelf \
+        --set-interpreter "${LD_LINUX}" \
+        --set-rpath "${GLIBC_DIR}:${GCC_LIB_DIR}" \
+        "${CLAUDE_REAL}"
 
 # Capture the resolved Claude CLI path at build time and bake it as
 # CLAUDE_CLI_PATH so runtime resolution can't drift if PATH changes
