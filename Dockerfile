@@ -53,11 +53,42 @@ FROM ghcr.io/efabless/openlane2:2.3.10 AS socmate
 # without a default `nixpkgs` user channel.
 RUN nix-channel --add https://nixos.org/channels/nixos-24.05 nixpkgs \
  && nix-channel --update \
- && nix-env -iA nixpkgs.nodejs_20 nixpkgs.gnumake
+ && nix-env -iA nixpkgs.nodejs_20 nixpkgs.gnumake nixpkgs.openssh
 
 ENV PATH="/root/.nix-profile/bin:${PATH}"
 
 RUN npm install -g @anthropic-ai/claude-code
+
+# Capture the resolved Claude CLI path at build time and bake it as
+# CLAUDE_CLI_PATH so runtime resolution can't drift if PATH changes
+# under us. Also fail the build loud if the install didn't actually
+# put `claude` on PATH (the runtime "PermissionError: ''" failure mode
+# is much harder to debug than a build-time missing-binary error).
+RUN set -eux \
+ && CLAUDE_BIN="$(command -v claude)" \
+ && test -x "${CLAUDE_BIN}" \
+ && claude --version \
+ && printf 'CLAUDE_CLI_PATH=%s\n' "${CLAUDE_BIN}" > /etc/socmate.env
+
+# sshd setup so RunPod / interactive users can ssh in (and the web
+# terminal works because PID 1 stays alive even after the pipeline
+# exits -- see runpod_entrypoint.sh's pipeline keep-alive). Host keys
+# are baked into the image; per-deploy authorized_keys is written by
+# the entrypoint from the PUBLIC_KEY env var.
+RUN mkdir -p /etc/ssh /var/run/sshd /run/sshd /root/.ssh \
+ && chmod 700 /root/.ssh \
+ && ssh-keygen -A \
+ && { \
+        echo "Port 22"; \
+        echo "PermitRootLogin prohibit-password"; \
+        echo "PasswordAuthentication no"; \
+        echo "PubkeyAuthentication yes"; \
+        echo "AuthorizedKeysFile /root/.ssh/authorized_keys"; \
+        echo "ChallengeResponseAuthentication no"; \
+        echo "UsePAM no"; \
+        echo "PrintMotd no"; \
+        echo "AcceptEnv LANG LC_*"; \
+    } > /etc/ssh/sshd_config
 
 # -----------------------------------------------------------------------------
 # Python venv + socmate deps. Done in two layers so a code-only edit

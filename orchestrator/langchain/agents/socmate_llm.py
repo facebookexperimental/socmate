@@ -432,11 +432,12 @@ class ClaudeLLM:
         if not self.claude_path:
             self.claude_path = os.environ.get("CLAUDE_CLI_PATH", "")
             if not self.claude_path:
-                try:
-                    self.claude_path = _find_claude_binary()
-                    logger.info(f"Found Claude CLI at: {self.claude_path}")
-                except FileNotFoundError as e:
-                    logger.error(str(e))
+                # Let FileNotFoundError propagate -- we'd rather crash
+                # `__init__` clearly than leave self.claude_path empty
+                # and Popen with cmd[0]="" later, which surfaces as the
+                # opaque ``PermissionError: [Errno 13] Permission denied: ''``.
+                self.claude_path = _find_claude_binary()
+                logger.info(f"Found Claude CLI at: {self.claude_path}")
 
     async def call(
         self,
