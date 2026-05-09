@@ -28,56 +28,73 @@
 #     socmate:latest
 
 # -----------------------------------------------------------------------------
-# Base: efabless/openlane:1.0.0 ships Yosys, OpenROAD, Magic, netgen,
-# KLayout and the Sky130 PDK on a Debian/Ubuntu userland (~5 GB compressed,
-# ~15 GB extracted). The Debian base matters: the npm-published Claude CLI
-# is now a Bun-compiled native ELF that expects a standard FHS dynamic
-# linker at /lib64/ld-linux-x86-64.so.2, which Nix-built images don't ship.
-# We previously tried `ghcr.io/efabless/openlane2:2.3.10` (Nix, ~1.5 GB)
-# and ended up with brittle patchelf / glibc-symlink hacks; the Debian
-# base just runs claude.exe directly without any of that.
+# Base: ghcr.io/efabless/openlane2 is a Nix-built image (~1.5 GB compressed)
+# that bundles Yosys, OpenROAD, Magic, netgen, KLayout, Verilator, iverilog
+# and OpenSTA already on PATH, plus a Python 3.11 environment. We layer
+# Node + the Claude CLI on top via the image's bundled Nix.
 #
-# Disk impact: this base no longer fits a default 32 GB Codespace
-# (`docker build` hits ~25 GB cap). It does fit GHA `ubuntu-latest` after
-# the disk-cleanup step in publish-image.yml, RunPod, and any normal
-# laptop. Codespaces users should pull the published image instead of
-# building from source, or use a larger Codespace machine.
+# All efabless/openlane* images are Nix-only -- there is no Debian-based
+# variant to fall back on. Earlier builds tried patching the glibc ELF
+# (`@anthropic-ai/claude-code-linux-x64`); it segfaulted because the
+# Bun-compiled binary's glibc ABI assumptions don't survive the move
+# from FHS to nix-store paths even after patchelf. The musl variant
+# (`@anthropic-ai/claude-code-linux-x64-musl`) is dynamically linked
+# against /lib/ld-musl-x86_64.so.1, which on musl is also the libc --
+# one symlink to nixpkgs.musl resolves the entire dependency, no
+# patchelf needed.
 # -----------------------------------------------------------------------------
-FROM efabless/openlane:1.0.0 AS socmate
+FROM ghcr.io/efabless/openlane2:2.3.10 AS socmate
 
-ARG DEBIAN_FRONTEND=noninteractive
-ARG NODE_MAJOR=20
+RUN nix-channel --add https://nixos.org/channels/nixos-24.05 nixpkgs \
+ && nix-channel --update \
+ && nix-env -iA \
+        nixpkgs.nodejs_20 \
+        nixpkgs.gnumake \
+        nixpkgs.openssh \
+        nixpkgs.musl
 
-# OpenLane's image runs as a non-root UID 1000; switch to root for
-# package installs and the layered changes below.
-USER root
+ENV PATH="/root/.nix-profile/bin:${PATH}"
 
-# System packages -- single layer to keep the apt cache tight.
-#
-# - ca-certificates curl git gnupg make sudo: build essentials
-# - openssh-server: lets the entrypoint stand up sshd when PUBLIC_KEY is
-#   set (RunPod web terminal + ssh from anywhere)
-# - python3.11 + venv: the orchestrator pins 3.11; the openlane base ships
-#   only python3.6 so we install fresh from apt
-# - verilator: lint + sim driver for the RTL phase
-# - nodejs: just for npm so we can install the Claude CLI; Node 20 LTS
-#   from NodeSource (the Debian-shipped Node is too old for the CLI)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl git gnupg make sudo \
-        openssh-server \
-        python3.11 python3.11-venv python3-pip \
-        verilator \
-    && curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
+# Make the musl ELF interpreter resolvable at the FHS path the binary
+# is hard-linked against. nix's musl ships ld-musl-x86_64.so.1 which is
+# also the libc; one symlink covers both. Without this, every musl
+# binary on this image dies with the kernel's "required file not found".
+RUN MUSL_LD="$(find /nix/store -maxdepth 4 -name 'ld-musl-x86_64.so.1' \
+        \( -type f -o -type l \) 2>/dev/null | head -1)" \
+ && test -n "${MUSL_LD}" \
+ && mkdir -p /lib \
+ && ln -sf "${MUSL_LD}" /lib/ld-musl-x86_64.so.1 \
+ && echo "musl_ld=${MUSL_LD}"
 
-RUN npm install -g @anthropic-ai/claude-code
+# Nix-built Node sets npm's default prefix into the read-only Nix store,
+# so `npm install -g` "succeeds" but the bin can't symlink anywhere on
+# PATH. Pin the prefix to a writable dir we explicitly put on PATH.
+ENV NPM_CONFIG_PREFIX=/opt/npm-global
+ENV PATH="/opt/npm-global/bin:${PATH}"
+
+# Install the wrapper package + the Linux-x64-musl native variant
+# explicitly. Setting `--include=optional` and listing the musl
+# subpackage by name forces the right binary regardless of what
+# install.cjs's runtime detection thinks (Nix Node is glibc-built so
+# `process.report` would otherwise pick the glibc variant).
+RUN mkdir -p /opt/npm-global \
+ && npm install -g \
+        @anthropic-ai/claude-code \
+        @anthropic-ai/claude-code-linux-x64-musl
+
+# `npm install -g`'s postinstall on the wrapper package may have copied
+# the glibc binary over bin/claude.exe (because Nix Node is glibc-
+# built). Force-replace bin/claude with a symlink to the musl-variant's
+# native binary so we use the version that actually runs on this image.
+RUN set -eux \
+ && MUSL_BIN=/opt/npm-global/lib/node_modules/@anthropic-ai/claude-code-linux-x64-musl/claude \
+ && test -x "${MUSL_BIN}" \
+ && ln -sf "${MUSL_BIN}" /opt/npm-global/bin/claude
 
 # Capture the resolved Claude CLI path at build time and bake it as
 # CLAUDE_CLI_PATH so runtime resolution can't drift if PATH changes
 # under us. Also fail the build loud if `claude --version` fails -- the
-# runtime "PermissionError: ''" failure mode is much harder to debug
-# than a build-time missing-binary error.
+# runtime "PermissionError: ''" failure mode is much harder to debug.
 RUN set -eux \
  && CLAUDE_BIN="$(command -v claude)" \
  && test -x "${CLAUDE_BIN}" \
@@ -89,22 +106,28 @@ RUN set -eux \
 # exits -- see runpod_entrypoint.sh's pipeline keep-alive). Host keys
 # are baked into the image; per-deploy authorized_keys is written by
 # the entrypoint from the PUBLIC_KEY env var.
-RUN mkdir -p /var/run/sshd /run/sshd /root/.ssh \
+RUN mkdir -p /etc/ssh /var/run/sshd /run/sshd /root/.ssh \
  && chmod 700 /root/.ssh \
  && ssh-keygen -A \
- && sed -i \
-        -e 's|^#\?\s*PermitRootLogin.*|PermitRootLogin prohibit-password|' \
-        -e 's|^#\?\s*PasswordAuthentication.*|PasswordAuthentication no|' \
-        -e 's|^#\?\s*PubkeyAuthentication.*|PubkeyAuthentication yes|' \
-        -e 's|^#\?\s*UsePAM.*|UsePAM no|' \
-        /etc/ssh/sshd_config
+ && { \
+        echo "Port 22"; \
+        echo "PermitRootLogin prohibit-password"; \
+        echo "PasswordAuthentication no"; \
+        echo "PubkeyAuthentication yes"; \
+        echo "AuthorizedKeysFile /root/.ssh/authorized_keys"; \
+        echo "ChallengeResponseAuthentication no"; \
+        echo "UsePAM no"; \
+        echo "PrintMotd no"; \
+        echo "AcceptEnv LANG LC_*"; \
+    } > /etc/ssh/sshd_config
 
 # -----------------------------------------------------------------------------
 # Python venv + socmate deps. Done in two layers so a code-only edit
-# doesn't bust the dependency cache.
+# doesn't bust the dependency cache. The base image's python3 is 3.11.9 so
+# we use it directly (no deadsnakes / system Python dance).
 # -----------------------------------------------------------------------------
 ENV VIRTUAL_ENV=/opt/socmate-venv
-RUN python3.11 -m venv "${VIRTUAL_ENV}"
+RUN python3 -m venv "${VIRTUAL_ENV}"
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
 WORKDIR /socmate
@@ -132,10 +155,10 @@ RUN pip install volare \
         "${SKY130_PDK_COMMIT}"
 
 # -----------------------------------------------------------------------------
-# Tool wrappers: the openlane base exposes yosys / openroad / magic /
-# netgen / klayout / verilator at the bare names on $PATH, so the
-# scripts/*-nix.sh wrappers just need to exec the real binary. Override
-# config.yaml to point at bare names.
+# Tool wrappers: openlane2 already exposes yosys / openroad / magic / netgen
+# / klayout / verilator at the bare names on $PATH, so the scripts/*-nix.sh
+# wrappers just need to exec the real binary. We override config.yaml to
+# point at bare names.
 # -----------------------------------------------------------------------------
 RUN python3 -c "import yaml, pathlib; \
 p = pathlib.Path('orchestrator/config.yaml'); \
