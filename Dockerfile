@@ -66,24 +66,35 @@ ENV PATH="/root/.nix-profile/bin:${PATH}"
 ENV NPM_CONFIG_PREFIX=/opt/npm-global
 ENV PATH="/opt/npm-global/bin:${PATH}"
 
-# The openlane2 nix base doesn't ship the standard /usr/bin/env, so
-# scripts whose shebang is `#!/usr/bin/env node` (which is what
-# `claude` from npm uses) fail to exec with "required file not found"
-# even when both env and node are present further up in PATH. Symlink
-# from the nix profile to the conventional location, idempotently.
-RUN if [ ! -e /usr/bin/env ]; then \
-        mkdir -p /usr/bin && \
-        ln -s "$(command -v env)" /usr/bin/env; \
-    fi
-
 RUN mkdir -p /opt/npm-global \
  && npm install -g @anthropic-ai/claude-code
 
+# Rewrite the npm-installed `claude` launcher's shebang to the absolute
+# path of the nix-profile node binary. The default `#!/usr/bin/env node`
+# shebang is fragile: the openlane2 nix base may not ship /usr/bin/env,
+# /usr/bin/env may be a stale symlink to a /nix/store path that no
+# longer exists, or env may not have node on its PATH at exec time. An
+# absolute interpreter path side-steps all of those.
+#
+# `npm install -g` may create the bin as either a symlink to the
+# package's cli.js or as a small wrapper script -- handle both by
+# resolving the symlink first and rewriting the shebang on the actual
+# script we end up exec'ing.
+RUN set -eux \
+ && NODE_BIN="$(command -v node)" \
+ && CLAUDE_LINK="/opt/npm-global/bin/claude" \
+ && CLAUDE_REAL="$(readlink -f "${CLAUDE_LINK}")" \
+ && echo "node=${NODE_BIN}  claude_link=${CLAUDE_LINK}  claude_real=${CLAUDE_REAL}" \
+ && test -f "${CLAUDE_REAL}" \
+ && head -1 "${CLAUDE_REAL}" \
+ && sed -i "1c#!${NODE_BIN}" "${CLAUDE_REAL}" \
+ && head -1 "${CLAUDE_REAL}"
+
 # Capture the resolved Claude CLI path at build time and bake it as
 # CLAUDE_CLI_PATH so runtime resolution can't drift if PATH changes
-# under us. Also fail the build loud if the install didn't actually
-# put `claude` on PATH (the runtime "PermissionError: ''" failure mode
-# is much harder to debug than a build-time missing-binary error).
+# under us. Also fail the build loud if `claude --version` fails (the
+# runtime "PermissionError: ''" failure mode is much harder to debug
+# than a build-time missing-binary error).
 RUN set -eux \
  && CLAUDE_BIN="$(command -v claude)" \
  && test -x "${CLAUDE_BIN}" \
