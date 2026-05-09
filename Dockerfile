@@ -58,6 +58,7 @@ RUN nix-channel --add https://nixos.org/channels/nixos-24.05 nixpkgs \
         nixpkgs.gnumake \
         nixpkgs.openssh \
         nixpkgs.patchelf \
+        nixpkgs.glibc \
         nixpkgs.gcc-unwrapped.lib
 
 ENV PATH="/root/.nix-profile/bin:${PATH}"
@@ -85,11 +86,13 @@ RUN mkdir -p /opt/npm-global \
 RUN set -eux \
  && CLAUDE_LINK=/opt/npm-global/bin/claude \
  && CLAUDE_REAL="$(readlink -f "${CLAUDE_LINK}")" \
- && GLIBC_LIBC="$(readlink -f /root/.nix-profile/lib/libc.so.6)" \
- && GLIBC_DIR="$(dirname "${GLIBC_LIBC}")" \
- && LD_LINUX="${GLIBC_DIR}/ld-linux-x86-64.so.2" \
- && GCC_LIB_DIR="$(dirname "$(readlink -f /root/.nix-profile/lib/libstdc++.so.6 2>/dev/null || readlink -f /root/.nix-profile/lib/libgcc_s.so.1)")" \
+ && LD_LINUX="$(find /nix/store -maxdepth 4 -name 'ld-linux-x86-64.so.2' \
+        \( -type f -o -type l \) 2>/dev/null | head -1)" \
+ && GLIBC_DIR="$(dirname "${LD_LINUX}")" \
+ && GCC_LIB_DIR="$(dirname "$(readlink -f /root/.nix-profile/lib/libstdc++.so.6 2>/dev/null \
+        || readlink -f /root/.nix-profile/lib/libgcc_s.so.1)")" \
  && echo "claude_real=${CLAUDE_REAL}  ld=${LD_LINUX}  glibc_dir=${GLIBC_DIR}  gcc_dir=${GCC_LIB_DIR}" \
+ && test -n "${LD_LINUX}" \
  && test -e "${LD_LINUX}" \
  && mkdir -p /lib64 \
  && ln -sf "${LD_LINUX}" /lib64/ld-linux-x86-64.so.2 \
