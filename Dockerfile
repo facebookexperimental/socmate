@@ -46,14 +46,28 @@
 FROM ghcr.io/efabless/openlane2:2.3.10 AS socmate
 
 RUN nix-channel --add https://nixos.org/channels/nixos-24.05 nixpkgs \
+ && nix-channel --add https://nixos.org/channels/nixos-unstable nixos-unstable \
  && nix-channel --update \
  && nix-env -iA \
         nixpkgs.nodejs_20 \
         nixpkgs.gnumake \
         nixpkgs.openssh \
-        nixpkgs.musl
+        nixpkgs.musl \
+ # Pull verilator from nixos-unstable so we get >= 5.036; the openlane2
+ # base ships 5.018 which cocotb 2.0+ refuses ("cocotb requires
+ # Verilator 5.036 or later"). Our PATH (set below) puts
+ # /root/.nix-profile/bin before the base's verilator dir so this wins.
+ && nix-env -iA nixos-unstable.verilator
 
 ENV PATH="/root/.nix-profile/bin:${PATH}"
+
+# Verify the unstable-channel verilator is on PATH and >= 5.036
+# (cocotb >= 2.0 requires it). Fails the build loud if PATH ordering
+# accidentally resurfaces the openlane2 base's stale 5.018.
+RUN set -eux \
+ && which verilator \
+ && verilator --version \
+ && verilator --version | python3 -c "import sys,re; v=sys.stdin.read().strip(); m=re.search(r'(\d+)\.(\d+)', v); maj,min=int(m.group(1)),int(m.group(2)); assert (maj,min) >= (5,36), f'verilator too old: {v}'; print(f'verilator OK: {v}')"
 
 # Make the musl ELF interpreter resolvable at the FHS path the binary
 # is hard-linked against. nix's musl ships ld-musl-x86_64.so.1 which is
@@ -134,6 +148,18 @@ RUN BASH_BIN="$(command -v bash)" \
  && chmod 700 /root/.ssh \
  && chmod 755 /var/empty \
  && ssh-keygen -A \
+ # The openlane2 base leaves root with `!` in /etc/shadow (locked
+ # password placeholder). nix-built openssh checks shadow even with
+ # `PermitRootLogin without-password` and rejects pubkey auth as
+ # "User root not allowed because account is locked". Replace `!` with
+ # `*` (no-password, but not locked) so pubkey auth is permitted.
+ # We use python because sed/passwd/usermod aren't on the base PATH.
+ && python3 -c "p='/etc/shadow'; t=open(p).read(); open(p,'w').write(t.replace('root:!:','root:*:',1))" \
+ # Locate sftp-server from the nix openssh package so SCP/SFTP work
+ # over our sshd (`Subsystem sftp` is required; otherwise scp gets
+ # "subsystem request failed"). Symlink for sshd_config stability.
+ && SFTP_SERVER="$(find /nix/store -path '*openssh*/libexec/sftp-server' -type f 2>/dev/null | head -1)" \
+ && test -x "${SFTP_SERVER}" \
  && { \
         echo "Port 22"; \
         echo "PermitRootLogin prohibit-password"; \
@@ -144,6 +170,7 @@ RUN BASH_BIN="$(command -v bash)" \
         echo "UsePAM no"; \
         echo "PrintMotd no"; \
         echo "AcceptEnv LANG LC_*"; \
+        echo "Subsystem sftp ${SFTP_SERVER}"; \
     } > /etc/ssh/sshd_config
 
 # -----------------------------------------------------------------------------
