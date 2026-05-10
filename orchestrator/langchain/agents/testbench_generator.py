@@ -108,13 +108,27 @@ class TestbenchGeneratorAgent:
                 run_name=run_name,
             )
 
+            # ClaudeLLM.call swallows non-zero exits (returns an error
+            # string instead of raising), so post-validate that the CLI
+            # actually wrote a real testbench. Without this check the
+            # downstream SIM step sees no file and logs the misleading
+            # "Skipped -- testbench file not found", and the previous
+            # max(test_count, 1) pretended the step generated 1 test.
             tb_file = Path(testbench_path) if testbench_path else None
-            test_count = 0
-            if tb_file and tb_file.exists():
-                tb_text = tb_file.read_text()
-                test_count = len(re.findall(r"@cocotb\.test\(\)", tb_text))
+            if not tb_file or not tb_file.exists():
+                raise RuntimeError(
+                    f"Testbench generation failed: claude CLI did not "
+                    f"write {testbench_path}"
+                )
+            tb_text = tb_file.read_text()
+            test_count = len(re.findall(r"@cocotb\.test\(\)", tb_text))
+            if test_count == 0:
+                raise RuntimeError(
+                    f"Testbench at {testbench_path} contains no "
+                    f"@cocotb.test() functions"
+                )
 
             return {
                 "testbench_path": testbench_path,
-                "test_count": max(test_count, 1),
+                "test_count": test_count,
             }

@@ -125,21 +125,36 @@ class IntegrationTestbenchGenerator:
                 run_name=f"Integration Testbench [{design_name}]",
             )
 
+            # Don't trust ClaudeLLM.call to raise on CLI failure -- it
+            # returns an error string in the output position. Validate
+            # the response actually contains a Python code block with
+            # @cocotb.test() functions before claiming success; the
+            # previous max(test_count, 1) lied to downstream SIM.
             testbench = self._extract_python(content)
             test_count = len(re.findall(r"@cocotb\.test\(\)", testbench))
 
-            written_path = ""
-            if testbench and output_path:
-                out = Path(output_path)
-                out.parent.mkdir(parents=True, exist_ok=True)
-                out.write_text(testbench, encoding="utf-8")
-                written_path = output_path
+            if not testbench or test_count == 0:
+                raise RuntimeError(
+                    f"Integration testbench generation failed: "
+                    f"claude CLI returned no usable Python code block "
+                    f"with @cocotb.test() functions"
+                )
+            if not output_path:
+                raise RuntimeError(
+                    "Integration testbench generation failed: no "
+                    "output_path provided; cannot persist the testbench"
+                )
 
-            span.set_attribute("test_count", max(test_count, 1))
+            out = Path(output_path)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(testbench, encoding="utf-8")
+            written_path = output_path
+
+            span.set_attribute("test_count", test_count)
 
             return {
                 "tb_path": written_path,
-                "test_count": max(test_count, 1),
+                "test_count": test_count,
             }
 
     def _extract_python(self, content: str) -> str:
