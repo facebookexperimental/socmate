@@ -31,33 +31,156 @@
 # Base: ghcr.io/efabless/openlane2 is a Nix-built image (~1.5 GB compressed)
 # that bundles Yosys, OpenROAD, Magic, netgen, KLayout, Verilator, iverilog
 # and OpenSTA already on PATH, plus a Python 3.11 environment. We layer
-# Node + the Claude CLI on top via the official Node tarball (the image has
-# no apt) and a per-project venv for the orchestrator deps.
+# Node + the Claude CLI on top via the image's bundled Nix.
 #
-# Why not the IIC-OSIC-TOOLS or efabless/openlane:1.x image? They're 5 GB+
-# compressed, ~15 GB extracted, and overflow the 32 GB Codespaces disk
-# during `docker buildx build` -- the build then falls through to the
-# alpine recovery container.
+# All efabless/openlane* images are Nix-only -- there is no Debian-based
+# variant to fall back on. Earlier builds tried patching the glibc ELF
+# (`@anthropic-ai/claude-code-linux-x64`); it segfaulted because the
+# Bun-compiled binary's glibc ABI assumptions don't survive the move
+# from FHS to nix-store paths even after patchelf. The musl variant
+# (`@anthropic-ai/claude-code-linux-x64-musl`) is dynamically linked
+# against /lib/ld-musl-x86_64.so.1, which on musl is also the libc --
+# one symlink to nixpkgs.musl resolves the entire dependency, no
+# patchelf needed.
 # -----------------------------------------------------------------------------
 FROM ghcr.io/efabless/openlane2:2.3.10 AS socmate
 
-# The image already runs as root with /nix/store on PATH, so we don't need
-# USER/WORKDIR juggling. We *do* need Node + npm for the Claude CLI;
-# openlane2 doesn't bundle Node, so we install via the image's bundled
-# Nix (a multi-stage COPY from node:20-slim doesn't work because that
-# binary needs /lib/x86_64-linux-gnu/libc.so.6 which the Nix-only base
-# doesn't provide).
-#
-# `nix-env -iA nixpkgs.nodejs_20` installs into /root/.nix-profile/bin;
-# we add a channel first because the openlane2 image is built declaratively
-# without a default `nixpkgs` user channel.
 RUN nix-channel --add https://nixos.org/channels/nixos-24.05 nixpkgs \
+ && nix-channel --add https://nixos.org/channels/nixos-unstable nixos-unstable \
  && nix-channel --update \
- && nix-env -iA nixpkgs.nodejs_20 nixpkgs.gnumake
+ && nix-env -iA \
+        nixpkgs.nodejs_20 \
+        nixpkgs.gnumake \
+        nixpkgs.openssh \
+        nixpkgs.musl \
+        nixpkgs.gcc \
+ # Pull verilator from nixos-unstable so we get >= 5.036; the openlane2
+ # base ships 5.018 which cocotb 2.0+ refuses ("cocotb requires
+ # Verilator 5.036 or later"). Our PATH (set below) puts
+ # /root/.nix-profile/bin before the base's verilator dir so this wins.
+ # nixpkgs.gcc bundles gcc + g++; verilator shells out to `g++` to
+ # compile the simulator binary and the openlane2 base does not put a
+ # C++ compiler on PATH for non-yosys subprocesses.
+ && nix-env -iA nixos-unstable.verilator
 
 ENV PATH="/root/.nix-profile/bin:${PATH}"
 
-RUN npm install -g @anthropic-ai/claude-code
+# Verify the unstable-channel verilator is on PATH and >= 5.036
+# (cocotb >= 2.0 requires it). Fails the build loud if PATH ordering
+# accidentally resurfaces the openlane2 base's stale 5.018.
+# Also verify g++ is reachable -- verilator shells out to it to
+# compile the testbench simulator and the missing-compiler error
+# only surfaces when sim runs, which is too late.
+RUN set -eux \
+ && which verilator \
+ && verilator --version \
+ && verilator --version | python3 -c "import sys,re; v=sys.stdin.read().strip(); m=re.search(r'(\d+)\.(\d+)', v); maj,min=int(m.group(1)),int(m.group(2)); assert (maj,min) >= (5,36), f'verilator too old: {v}'; print(f'verilator OK: {v}')" \
+ && which g++ \
+ && g++ --version | head -1
+
+# Make the musl ELF interpreter resolvable at the FHS path the binary
+# is hard-linked against. nix's musl ships ld-musl-x86_64.so.1 which is
+# also the libc; one symlink covers both. Without this, every musl
+# binary on this image dies with the kernel's "required file not found".
+RUN MUSL_LD="$(find /nix/store -maxdepth 4 -name 'ld-musl-x86_64.so.1' \
+        \( -type f -o -type l \) 2>/dev/null | head -1)" \
+ && test -n "${MUSL_LD}" \
+ && mkdir -p /lib \
+ && ln -sf "${MUSL_LD}" /lib/ld-musl-x86_64.so.1 \
+ && echo "musl_ld=${MUSL_LD}"
+
+# Nix-built Node sets npm's default prefix into the read-only Nix store,
+# so `npm install -g` "succeeds" but the bin can't symlink anywhere on
+# PATH. Pin the prefix to a writable dir we explicitly put on PATH.
+ENV NPM_CONFIG_PREFIX=/opt/npm-global
+ENV PATH="/opt/npm-global/bin:${PATH}"
+
+# Install the wrapper package + the Linux-x64-musl native variant.
+# `--libc=musl` lies to npm's resolver about the host libc so it
+# accepts the musl subpackage (Nix Node is glibc-built, so npm would
+# otherwise reject it with EBADPLATFORM). `--force` is belt-and-braces
+# in case the resolver still complains. The wrapper's install.cjs
+# postinstall will still pick the glibc variant for bin/claude.exe
+# because it reads process.report.glibcVersionRuntime directly -- the
+# RUN below replaces that with a symlink to the musl binary.
+RUN mkdir -p /opt/npm-global \
+ && npm install -g --force --libc=musl \
+        @anthropic-ai/claude-code \
+        @anthropic-ai/claude-code-linux-x64-musl
+
+# `npm install -g`'s postinstall on the wrapper package may have copied
+# the glibc binary over bin/claude.exe (because Nix Node is glibc-
+# built). Force-replace bin/claude with a symlink to the musl-variant's
+# native binary so we use the version that actually runs on this image.
+RUN set -eux \
+ && MUSL_BIN=/opt/npm-global/lib/node_modules/@anthropic-ai/claude-code-linux-x64-musl/claude \
+ && test -x "${MUSL_BIN}" \
+ && ln -sf "${MUSL_BIN}" /opt/npm-global/bin/claude
+
+# Capture the resolved Claude CLI path at build time and bake it as
+# CLAUDE_CLI_PATH so runtime resolution can't drift if PATH changes
+# under us. Also fail the build loud if `claude --version` fails -- the
+# runtime "PermissionError: ''" failure mode is much harder to debug.
+RUN set -eux \
+ && CLAUDE_BIN="$(command -v claude)" \
+ && test -x "${CLAUDE_BIN}" \
+ && claude --version \
+ && printf 'CLAUDE_CLI_PATH=%s\n' "${CLAUDE_BIN}" > /etc/socmate.env
+
+# sshd setup so RunPod / interactive users can ssh in (and the web
+# terminal works because PID 1 stays alive even after the pipeline
+# exits -- see runpod_entrypoint.sh's pipeline keep-alive). Host keys
+# are baked into the image; per-deploy authorized_keys is written by
+# the entrypoint from the PUBLIC_KEY env var.
+#
+# Three quirks of the openlane2 nix-only base we work around here:
+#   1. No `sshd` privsep user exists -- nix's openssh refuses to start
+#      without one ("Privilege separation user sshd does not exist").
+#      We add it via useradd; UsePrivilegeSeparation=no would also work
+#      but is deprecated in modern OpenSSH.
+#   2. No /bin/bash -- the openlane2 base ships only nix-store paths,
+#      so RunPod's `docker exec /bin/bash` (used by their SSH proxy
+#      and web terminal) fails. Symlink to the nix-store bash.
+#   3. /var/empty (the privsep chroot) must exist and be root-owned.
+RUN BASH_BIN="$(command -v bash)" \
+ && test -x "${BASH_BIN}" \
+ && ln -sf "${BASH_BIN}" /bin/bash \
+ && if ! getent passwd sshd >/dev/null 2>&1; then \
+        if command -v useradd >/dev/null 2>&1; then \
+            useradd -r -M -d /var/empty -s /usr/sbin/nologin sshd; \
+        else \
+            echo 'sshd:x:74:74:Privilege-separated SSH:/var/empty:/usr/sbin/nologin' >> /etc/passwd \
+         && echo 'sshd:x:74:' >> /etc/group; \
+        fi; \
+    fi \
+ && mkdir -p /etc/ssh /var/run/sshd /run/sshd /root/.ssh /var/empty \
+ && chmod 700 /root/.ssh \
+ && chmod 755 /var/empty \
+ && ssh-keygen -A \
+ # The openlane2 base leaves root with `!` in /etc/shadow (locked
+ # password placeholder). nix-built openssh checks shadow even with
+ # `PermitRootLogin without-password` and rejects pubkey auth as
+ # "User root not allowed because account is locked". Replace `!` with
+ # `*` (no-password, but not locked) so pubkey auth is permitted.
+ # We use python because sed/passwd/usermod aren't on the base PATH.
+ && python3 -c "p='/etc/shadow'; t=open(p).read(); open(p,'w').write(t.replace('root:!:','root:*:',1))" \
+ # Locate sftp-server from the nix openssh package so SCP/SFTP work
+ # over our sshd (`Subsystem sftp` is required; otherwise scp gets
+ # "subsystem request failed"). Symlink for sshd_config stability.
+ && SFTP_SERVER="$(find /nix/store -path '*openssh*/libexec/sftp-server' -type f 2>/dev/null | head -1)" \
+ && test -x "${SFTP_SERVER}" \
+ && { \
+        echo "Port 22"; \
+        echo "PermitRootLogin prohibit-password"; \
+        echo "PasswordAuthentication no"; \
+        echo "PubkeyAuthentication yes"; \
+        echo "AuthorizedKeysFile /root/.ssh/authorized_keys"; \
+        echo "ChallengeResponseAuthentication no"; \
+        echo "UsePAM no"; \
+        echo "PrintMotd no"; \
+        echo "AcceptEnv LANG LC_*"; \
+        echo "Subsystem sftp ${SFTP_SERVER}"; \
+    } > /etc/ssh/sshd_config
 
 # -----------------------------------------------------------------------------
 # Python venv + socmate deps. Done in two layers so a code-only edit

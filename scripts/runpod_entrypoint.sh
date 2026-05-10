@@ -24,8 +24,25 @@
 #   SOCMATE_MODEL=sonnet-4.6   Pin a specific model (short name or full ID)
 #   SOCMATE_REQUIREMENTS_FILE  Path to a text file with architecture requirements
 #                              (used in mcp / pipeline modes that need a starter prompt)
+#   PUBLIC_KEY                 SSH public key to install for root. If set, the
+#                              entrypoint starts sshd in the background so the
+#                              container is reachable on port 22 (RunPod sets
+#                              this automatically from the pod template).
+#   SOCMATE_KEEP_ALIVE=1       In pipeline mode, keep the container running
+#                              after the pipeline exits (so SSH / RunPod web
+#                              terminal can still attach for inspection).
+#                              Implied when PUBLIC_KEY is set.
 
 set -euo pipefail
+
+# Pick up build-time-baked env (currently: CLAUDE_CLI_PATH so the orchestrator
+# can't fail to resolve `claude` if a downstream PATH munge drops the nix
+# profile dir).
+if [[ -f /etc/socmate.env ]]; then
+    # shellcheck disable=SC1091
+    . /etc/socmate.env
+    [[ -n "${CLAUDE_CLI_PATH:-}" ]] && export CLAUDE_CLI_PATH
+fi
 
 # --- Project root -----------------------------------------------------------
 PROJECT_ROOT="${SOCMATE_PROJECT_ROOT:-/socmate}"
@@ -33,6 +50,32 @@ cd "${PROJECT_ROOT}"
 
 mode="${SOCMATE_MODE:-shell}"
 echo "[socmate] entrypoint: mode=${mode} project_root=${PROJECT_ROOT}"
+
+# --- Optional sshd bootstrap (RunPod / interactive use) ---------------------
+# Started for every mode -- harmless if no PUBLIC_KEY is set (returns early).
+maybe_start_sshd() {
+    if [[ -z "${PUBLIC_KEY:-}" ]]; then
+        return 0
+    fi
+    local sshd_bin
+    sshd_bin="$(command -v sshd 2>/dev/null || true)"
+    if [[ -z "${sshd_bin}" ]]; then
+        echo "[socmate] PUBLIC_KEY set but sshd not installed; skipping ssh setup" >&2
+        return 0
+    fi
+    mkdir -p /root/.ssh /var/run/sshd /run/sshd
+    chmod 700 /root/.ssh
+    if ! grep -qxF "${PUBLIC_KEY}" /root/.ssh/authorized_keys 2>/dev/null; then
+        printf '%s\n' "${PUBLIC_KEY}" >> /root/.ssh/authorized_keys
+    fi
+    chmod 600 /root/.ssh/authorized_keys
+    if "${sshd_bin}"; then
+        echo "[socmate] sshd started on :22 (PUBLIC_KEY accepted)"
+    else
+        echo "[socmate] sshd failed to start (rc=$?)" >&2
+    fi
+}
+maybe_start_sshd
 
 # --- Auth check (skipped in shell mode so users can poke around) ------------
 require_auth() {
@@ -102,8 +145,30 @@ case "${mode}" in
     pipeline)
         require_auth
         run_preflight
-        echo "[socmate] starting frontend pipeline (run_pipeline.py)"
-        exec python3 run_pipeline.py "$@"
+        log_file="${SOCMATE_PIPELINE_LOG:-/socmate/.socmate/pipeline.log}"
+        mkdir -p "$(dirname "${log_file}")"
+        echo "[socmate] starting frontend pipeline (run_pipeline.py); log -> ${log_file}"
+
+        # Run the pipeline with stdout/stderr teed to a persistent log on
+        # the volume. Using `set +e` + PIPESTATUS so a non-zero pipeline
+        # rc doesn't kill the script before the keep-alive branch.
+        set +e
+        python3 run_pipeline.py "$@" 2>&1 | tee "${log_file}"
+        rc=${PIPESTATUS[0]}
+        set -e
+        echo "[socmate] pipeline exited rc=${rc}"
+
+        # Keep PID 1 alive on RunPod (PUBLIC_KEY set) or when the operator
+        # explicitly opts in via SOCMATE_KEEP_ALIVE=1, so SSH and the
+        # RunPod web terminal can still attach for post-mortem. For plain
+        # `docker run` users with neither set, exit cleanly with the
+        # pipeline's rc.
+        if [[ "${SOCMATE_KEEP_ALIVE:-0}" == "1" ]] || [[ -n "${PUBLIC_KEY:-}" ]]; then
+            echo "[socmate] keeping container alive for inspection (rc=${rc})."
+            echo "[socmate] tailing ${log_file} as PID 1; ssh in to inspect state."
+            exec tail -F "${log_file}"
+        fi
+        exit "${rc}"
         ;;
 
     mcp)
