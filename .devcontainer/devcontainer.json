@@ -2,13 +2,15 @@
     "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
     "name": "socmate",
 
-    // Reuse the production Dockerfile so Codespaces and `docker build` stay
-    // bit-identical. First build is ~15-20 min (Sky130 PDK download
-    // dominates); rebuilds are seconds.
-    "build": {
-        "dockerfile": "../Dockerfile",
-        "context": ".."
-    },
+    // Pull the prebuilt image published by .github/workflows/publish-image.yml
+    // on every push to main. First codespace start drops from ~15-20 min
+    // (full Dockerfile build incl. Sky130 PDK download) to ~1 min (image
+    // pull). The tradeoff: codespaces on a feature branch will NOT pick up
+    // Dockerfile changes from that branch -- they always boot from
+    // `:latest` (= last green main). For Dockerfile/toolchain work, build
+    // locally with `docker build -t socmate:dev .` and test outside
+    // Codespaces, or temporarily flip this back to a `build` block.
+    "image": "ghcr.io/facebookexperimental/socmate:latest",
 
     // The openlane2 base image already runs as root with /nix/store on
     // PATH; keep the dev container as root so the entrypoint can write
