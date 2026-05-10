@@ -739,12 +739,23 @@ async def generate_testbench_node(state: BlockState) -> dict:
             log(f"  [TB] Using existing (fresh): {block['testbench']}", GREEN)
         else:
             log("  [TB] Generating cocotb testbench...", YELLOW)
-            tb_result = await generate_testbench(
-                block,
-                callbacks=_callbacks(state),
-            )
-            test_count = tb_result.get("test_count", "?")
-            log(f"  [TB] Generated ({test_count} tests)", GREEN)
+            try:
+                tb_result = await generate_testbench(
+                    block,
+                    callbacks=_callbacks(state),
+                )
+            except RuntimeError as exc:
+                # The agent now raises if claude CLI failed to write
+                # a usable testbench. Fall through to the SIM-skipped
+                # path (preserves the existing retry semantics) but
+                # log the actual reason instead of a misleading
+                # "Generated (N tests)" / "testbench file not found"
+                # mirage.
+                log(f"  [TB] Generation failed: {exc}", RED)
+                tb_result = {"test_count": 0}
+            else:
+                test_count = tb_result.get("test_count", "?")
+                log(f"  [TB] Generated ({test_count} tests)", GREEN)
 
         tb_path = str(tb_path_obj)
 
