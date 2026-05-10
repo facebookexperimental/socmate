@@ -142,9 +142,23 @@ RUN set -eux \
 #      so RunPod's `docker exec /bin/bash` (used by their SSH proxy
 #      and web terminal) fails. Symlink to the nix-store bash.
 #   3. /var/empty (the privsep chroot) must exist and be root-owned.
+#   4. No /usr/sbin/sshd -- the GitHub Codespaces agent does its
+#      "is sshd installed?" check by stat'ing standard FHS paths
+#      (/usr/sbin/sshd, /usr/bin/ssh-keygen). Without these symlinks
+#      it logs "Please check if an SSH server is installed" and
+#      `gh codespace ssh` is dead even though sshd is on $PATH.
+#      Same workaround as #1/#2: symlink the nix-store binary at
+#      the FHS path the consumer expects.
 RUN BASH_BIN="$(command -v bash)" \
+ && SSHD_BIN="$(command -v sshd)" \
+ && SSH_KEYGEN_BIN="$(command -v ssh-keygen)" \
  && test -x "${BASH_BIN}" \
+ && test -x "${SSHD_BIN}" \
+ && test -x "${SSH_KEYGEN_BIN}" \
  && ln -sf "${BASH_BIN}" /bin/bash \
+ && mkdir -p /usr/sbin /usr/bin \
+ && ln -sf "${SSHD_BIN}" /usr/sbin/sshd \
+ && ln -sf "${SSH_KEYGEN_BIN}" /usr/bin/ssh-keygen \
  && if ! getent passwd sshd >/dev/null 2>&1; then \
         if command -v useradd >/dev/null 2>&1; then \
             useradd -r -M -d /var/empty -s /usr/sbin/nologin sshd; \
