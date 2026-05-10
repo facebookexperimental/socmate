@@ -53,10 +53,14 @@ RUN nix-channel --add https://nixos.org/channels/nixos-24.05 nixpkgs \
         nixpkgs.gnumake \
         nixpkgs.openssh \
         nixpkgs.musl \
+        nixpkgs.gcc \
  # Pull verilator from nixos-unstable so we get >= 5.036; the openlane2
  # base ships 5.018 which cocotb 2.0+ refuses ("cocotb requires
  # Verilator 5.036 or later"). Our PATH (set below) puts
  # /root/.nix-profile/bin before the base's verilator dir so this wins.
+ # nixpkgs.gcc bundles gcc + g++; verilator shells out to `g++` to
+ # compile the simulator binary and the openlane2 base does not put a
+ # C++ compiler on PATH for non-yosys subprocesses.
  && nix-env -iA nixos-unstable.verilator
 
 ENV PATH="/root/.nix-profile/bin:${PATH}"
@@ -64,10 +68,15 @@ ENV PATH="/root/.nix-profile/bin:${PATH}"
 # Verify the unstable-channel verilator is on PATH and >= 5.036
 # (cocotb >= 2.0 requires it). Fails the build loud if PATH ordering
 # accidentally resurfaces the openlane2 base's stale 5.018.
+# Also verify g++ is reachable -- verilator shells out to it to
+# compile the testbench simulator and the missing-compiler error
+# only surfaces when sim runs, which is too late.
 RUN set -eux \
  && which verilator \
  && verilator --version \
- && verilator --version | python3 -c "import sys,re; v=sys.stdin.read().strip(); m=re.search(r'(\d+)\.(\d+)', v); maj,min=int(m.group(1)),int(m.group(2)); assert (maj,min) >= (5,36), f'verilator too old: {v}'; print(f'verilator OK: {v}')"
+ && verilator --version | python3 -c "import sys,re; v=sys.stdin.read().strip(); m=re.search(r'(\d+)\.(\d+)', v); maj,min=int(m.group(1)),int(m.group(2)); assert (maj,min) >= (5,36), f'verilator too old: {v}'; print(f'verilator OK: {v}')" \
+ && which g++ \
+ && g++ --version | head -1
 
 # Make the musl ELF interpreter resolvable at the FHS path the binary
 # is hard-linked against. nix's musl ships ld-musl-x86_64.so.1 which is
