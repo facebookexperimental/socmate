@@ -2,13 +2,15 @@
     "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
     "name": "socmate",
 
-    // Reuse the production Dockerfile so Codespaces and `docker build` stay
-    // bit-identical. First build is ~15-20 min (Sky130 PDK download
-    // dominates); rebuilds are seconds.
-    "build": {
-        "dockerfile": "../Dockerfile",
-        "context": ".."
-    },
+    // Pull the prebuilt image published by .github/workflows/publish-image.yml
+    // on every push to main. First codespace start drops from ~15-20 min
+    // (full Dockerfile build incl. Sky130 PDK download) to ~1 min (image
+    // pull). The tradeoff: codespaces on a feature branch will NOT pick up
+    // Dockerfile changes from that branch -- they always boot from
+    // `:latest` (= last green main). For Dockerfile/toolchain work, build
+    // locally with `docker build -t socmate:dev .` and test outside
+    // Codespaces, or temporarily flip this back to a `build` block.
+    "image": "ghcr.io/facebookexperimental/socmate:latest",
 
     // The openlane2 base image already runs as root with /nix/store on
     // PATH; keep the dev container as root so the entrypoint can write
@@ -33,6 +35,17 @@
             "onAutoForward": "silent"
         }
     },
+
+    // Start sshd inside the codespace so `gh codespace ssh` works.
+    // The image (from fix/runpod-supervisor) installs openssh, the sshd
+    // privsep user, host keys, and a hardened sshd_config -- but its
+    // ENTRYPOINT is bypassed by the Codespaces VS Code agent, so the
+    // RunPod-side `maybe_start_sshd` never runs here. This hook fills
+    // that gap. Failure is non-fatal (`|| true`) so a future image
+    // without sshd doesn't break codespace creation; GitHub injects the
+    // user's pubkey into authorized_keys automatically once a listener
+    // is reachable.
+    "postCreateCommand": "sshd 2>/dev/null || true",
 
     // Run preflight on attach so users know immediately whether the
     // toolchain came up correctly. This does NOT call the LLM; it just
