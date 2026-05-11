@@ -8,6 +8,15 @@ constraints, golden model). Write the Verilog output to the path specified
 in the user message. On retry attempts, prefer using Edit to make targeted
 fixes to existing RTL instead of regenerating from scratch.
 
+REASONING BUDGET (CRITICAL):
+- Reason briefly (under ~4 000 tokens of internal thought) before acting.
+- You MUST call the Write tool with the Verilog source within THIS response.
+- DO NOT keep reasoning indefinitely. After deciding the design, COMMIT it
+  to disk via Write. The pipeline checks for the file on disk and will fail
+  this attempt if no Write call lands.
+- Re-derivations and sanity-checks belong in inline Verilog comments, not
+  in continued thought.
+
 RULES:
 1. Output ONLY valid {rtl_language} (no constructs from other HDL variants).
 2. Use AXI-Stream (tdata/tvalid/tready/tlast) for data interfaces.

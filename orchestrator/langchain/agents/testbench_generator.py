@@ -16,7 +16,7 @@ Strategy:
 
 from __future__ import annotations
 
-import os
+from orchestrator._timeouts import scaled
 import re
 from pathlib import Path
 from typing import Any
@@ -49,7 +49,7 @@ class TestbenchGeneratorAgent:
         # whose testbenches need many turns of tool use.
         self.llm = ClaudeLLM(
             model=model,
-            timeout=int(os.environ.get("SOCMATE_TB_TIMEOUT", "1800")),
+            timeout=scaled(1800, env="SOCMATE_TB_TIMEOUT"),
         )
 
     async def generate(

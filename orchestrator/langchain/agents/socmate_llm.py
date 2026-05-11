@@ -32,6 +32,8 @@ import threading
 import time as _time_mod
 from pathlib import Path
 
+from orchestrator._timeouts import scaled
+
 logger = logging.getLogger(__name__)
 
 
@@ -505,7 +507,10 @@ class ClaudeLLM:
     # Stall detection: if no new stdout/stderr output for this many seconds
     # the process is likely hung on a permission prompt or similar.
     # Set to 1200s (20 min) for slower specialist calls (clock tree, memory map, etc.)
-    _STALL_THRESHOLD_S: int = 1200
+    # Scaled by SOCMATE_TIMEOUT_MULTIPLIER (default 1.0) so slow local models
+    # like Qwen 3.6 27B (~25 tok/s on a single RTX PRO 6000) can finish
+    # their 25-30K-token reasoning + write trajectories without being killed.
+    _STALL_THRESHOLD_S: int = 1200  # scaled by scaled() at use sites; see orchestrator._timeouts
     # How often to poll the subprocess and emit heartbeat events.
     _POLL_INTERVAL_S: float = 2.0
     # Heartbeat events are written every N poll cycles (to avoid log spam).
@@ -802,7 +807,7 @@ class ClaudeLLM:
 
                 # Stall detection (no output activity)
                 stall_time = _time_mod.monotonic() - last_activity
-                if stall_time > self._STALL_THRESHOLD_S:
+                if stall_time > scaled(self._STALL_THRESHOLD_S):
                     partial = "".join(stderr_chunks + stdout_chunks)
                     logger.error(
                         "Claude CLI stalled for %.0fs with no output (pid=%d). "
