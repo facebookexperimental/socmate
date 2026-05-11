@@ -16,6 +16,7 @@ before writing Verilog.
 
 from __future__ import annotations
 
+from orchestrator._timeouts import scaled
 import json
 import os
 import re
@@ -46,7 +47,7 @@ class UarchSpecGenerator:
     def __init__(self, model: str = DEFAULT_MODEL, temperature: float = 0.2):
         self.llm = ClaudeLLM(
             model=model,
-            timeout=int(os.environ.get("SOCMATE_UARCH_TIMEOUT", "2700")),
+            timeout=scaled(2700, env="SOCMATE_UARCH_TIMEOUT"),
         )
 
     async def generate(

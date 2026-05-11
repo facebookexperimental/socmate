@@ -22,6 +22,7 @@ Provides:
 
 from __future__ import annotations
 
+from orchestrator._timeouts import scaled
 import os
 import shutil
 import subprocess
@@ -336,7 +337,22 @@ async def generate_uarch_spec(
     spec_dir = PROJECT_ROOT / ARCH_DOC_DIR / "uarch_specs"
     spec_dir.mkdir(parents=True, exist_ok=True)
     spec_path = spec_dir / f"{block['name']}.md"
-    spec_path.write_text(result["spec_text"])
+    # Disk-first: if the agent wrote a richer spec via its write/edit tool
+    # (e.g. opencode), prefer that on-disk content over the text we got back
+    # through stdout. Only fall back to result["spec_text"] when the disk file
+    # is empty or much smaller than the model's stdout response.
+    spec_returned = result.get("spec_text") or ""
+    if spec_path.exists():
+        on_disk = spec_path.read_text()
+        # If the on-disk file is meaningfully larger than the stdout text,
+        # the agent wrote a real spec via its tools -- keep the disk version
+        # and surface that as the canonical spec.
+        if len(on_disk) > max(len(spec_returned), 256):
+            result["spec_text"] = on_disk
+        else:
+            spec_path.write_text(spec_returned)
+    else:
+        spec_path.write_text(spec_returned)
     result["spec_path"] = str(spec_path)
 
     return result
@@ -397,7 +413,7 @@ def lint_rtl(rtl_path: str, block_name: str, attempt: int = 1) -> dict:
     cmd.append(rtl_path)
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=scaled(60))
         log_path = _write_step_log(block_name, "lint", cmd, result, attempt)
         stderr = result.stderr.strip()
         has_errors = "%Error" in stderr
@@ -484,7 +500,7 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
             [make_bin, "-C", str(sim_dir)],
             capture_output=True,
             text=True,
-            timeout=900,
+            timeout=scaled(900),
             env=env,
         )
         log_path = _write_step_log(block_name, "simulate", [make_bin, "-C", str(sim_dir)], result, attempt)
@@ -623,7 +639,7 @@ write_verilog -noattr {netlist_path}
             ["yosys", "-s", str(script_path)],
             capture_output=True,
             text=True,
-            timeout=1800,
+            timeout=scaled(1800),
         )
 
         gate_count = 0
@@ -713,7 +729,7 @@ async def fix_lint_errors(
     block_title = block_name.replace("_", " ").title()
     llm = ClaudeLLM(
         model=DEFAULT_MODEL,
-        timeout=int(os.environ.get("SOCMATE_LINT_FIX_TIMEOUT", "600")),
+        timeout=scaled(600, env="SOCMATE_LINT_FIX_TIMEOUT"),
     )
 
     try:
@@ -767,7 +783,7 @@ async def fix_synth_errors(
     block_title = block_name.replace("_", " ").title()
     llm = ClaudeLLM(
         model=DEFAULT_MODEL,
-        timeout=int(os.environ.get("SOCMATE_SYNTH_FIX_TIMEOUT", "600")),
+        timeout=scaled(600, env="SOCMATE_SYNTH_FIX_TIMEOUT"),
     )
 
     try:
@@ -836,7 +852,7 @@ async def fix_testbench_errors(
     # didn't address the root cause.
     llm = ClaudeLLM(
         model=DEFAULT_MODEL,
-        timeout=int(os.environ.get("SOCMATE_TB_FIX_TIMEOUT", "600")),
+        timeout=scaled(600, env="SOCMATE_TB_FIX_TIMEOUT"),
     )
 
     try:
