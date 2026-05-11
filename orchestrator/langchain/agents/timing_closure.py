@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from orchestrator._timeouts import scaled
 import json
-import os
 import re
 from pathlib import Path
 from typing import Any
