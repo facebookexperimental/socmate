@@ -135,9 +135,9 @@ class IntegrationTestbenchGenerator:
 
             if not testbench or test_count == 0:
                 raise RuntimeError(
-                    f"Integration testbench generation failed: "
-                    f"claude CLI returned no usable Python code block "
-                    f"with @cocotb.test() functions"
+                    "Integration testbench generation failed: "
+                    "claude CLI returned no usable Python code block "
+                    "with @cocotb.test() functions"
                 )
             if not output_path:
                 raise RuntimeError(
