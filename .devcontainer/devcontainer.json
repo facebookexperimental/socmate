@@ -36,17 +36,6 @@
         }
     },
 
-    // Start sshd inside the codespace so `gh codespace ssh` works.
-    // The image (from fix/runpod-supervisor) installs openssh, the sshd
-    // privsep user, host keys, and a hardened sshd_config -- but its
-    // ENTRYPOINT is bypassed by the Codespaces VS Code agent, so the
-    // RunPod-side `maybe_start_sshd` never runs here. This hook fills
-    // that gap. Failure is non-fatal (`|| true`) so a future image
-    // without sshd doesn't break codespace creation; GitHub injects the
-    // user's pubkey into authorized_keys automatically once a listener
-    // is reachable.
-    "postCreateCommand": "sshd 2>/dev/null || true",
-
     // Run preflight on attach so users know immediately whether the
     // toolchain came up correctly. This does NOT call the LLM; it just
     // checks that the PDK and EDA binaries exist on $PATH.
