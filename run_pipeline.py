@@ -177,6 +177,27 @@ async def main():
                 log(f"  [AUTO] Auto-approving integration review for tier {tier} "
                     f"({len(names)} blocks, {issues} issues)", YELLOW)
                 resume_value = {"action": "approve"}
+            elif first_payload.get("type") == "pipeline_incomplete":
+                # Gate failure: pipeline_complete_node fired because one or more
+                # blocks did not pass.  Earlier behavior was to fall through to
+                # the catch-all block-retry handler, which sent ``{"action":
+                # "retry"}`` with attempt=1 -- meaningless at this node, and the
+                # graph then sailed through to integration_check with a
+                # partial-datapath design.  Fail loudly and stop the run instead.
+                passed = first_payload.get("passed", 0)
+                expected = first_payload.get("expected", 0)
+                failed_names = [b.get("name", "?") for b in
+                                first_payload.get("failed_blocks", [])]
+                missing = first_payload.get("missing_blocks", [])
+                log(f"\n  [PIPELINE GATE FAILED] "
+                    f"{passed}/{expected} blocks passed.", RED)
+                if failed_names:
+                    log(f"  [PIPELINE GATE FAILED] Failed: {failed_names}", RED)
+                if missing:
+                    log(f"  [PIPELINE GATE FAILED] Missing: {missing}", RED)
+                log(f"  [PIPELINE GATE FAILED] NOT proceeding to integration. "
+                    f"Diagnose the failing blocks and re-run.", RED)
+                raise SystemExit(2)
             else:
                 block_name = first_payload.get("block_name", "?")
                 attempt = first_payload.get("attempt", 1)
@@ -204,12 +225,18 @@ async def main():
     elapsed = time.time() - start_time
     elapsed_min = elapsed / 60.0
 
-    log(f"\n{'#'*60}", CYAN)
-    log("  PIPELINE COMPLETE", CYAN)
-    log(f"{'#'*60}\n", CYAN)
-
     passed = [r for r in completed if r.get("success")]
     failed = [r for r in completed if not r.get("success")]
+
+    # Only claim "COMPLETE" if every block actually passed.  Earlier code
+    # printed PIPELINE COMPLETE unconditionally, which made partial-success
+    # runs read as full successes in logs and dashboards.
+    log(f"\n{'#'*60}", CYAN)
+    if failed:
+        log(f"  PIPELINE PARTIAL: {len(passed)}/{len(completed)} blocks passed", YELLOW)
+    else:
+        log("  PIPELINE COMPLETE", CYAN)
+    log(f"{'#'*60}\n", CYAN)
 
     log(f"  Results: {len(passed)}/{len(completed)} blocks passed")
     log(f"  Elapsed: {elapsed_min:.1f} minutes\n")

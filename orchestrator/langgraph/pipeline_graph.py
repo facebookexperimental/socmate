@@ -300,6 +300,7 @@ class OrchestratorState(TypedDict):
 
     # Terminal ──────────────────────────────────────────────────────────────
     pipeline_done: bool
+    pipeline_aborted: bool  # set by pipeline_complete_node on abort resume
 
 
 # ---------------------------------------------------------------------------
@@ -2012,7 +2013,17 @@ async def pipeline_complete_node(state: OrchestratorState) -> dict:
             "missing_blocks": missing_blocks,
         })
 
-        interrupt(payload)
+        resume = interrupt(payload)
+
+        # Honor the abort action so a partial-completion gate cannot be
+        # bypassed by a no-op resume.  ``supported_actions`` advertised by
+        # the payload is ["retry", "abort"]; only the explicit retry path
+        # should let us continue to integration_check.
+        if isinstance(resume, dict) and resume.get("action") == "abort":
+            log(f"  [PIPELINE] Aborted at gate with "
+                f"{passed}/{expected} blocks passed; not proceeding to "
+                f"integration.", RED)
+            return {"pipeline_done": False, "pipeline_aborted": True}
 
     return {"pipeline_done": True}
 
@@ -2668,7 +2679,11 @@ def build_pipeline_graph(checkpointer=None):
     orchestrator.add_edge("process_block", "integration_review")
     orchestrator.add_conditional_edges("integration_review", route_after_integration_review)
     orchestrator.add_conditional_edges("advance_tier", route_next_tier)
-    orchestrator.add_edge("pipeline_complete", "integration_check")
+    orchestrator.add_conditional_edges(
+        "pipeline_complete",
+        lambda s: END if s.get("pipeline_aborted") else "integration_check",
+        {END: END, "integration_check": "integration_check"},
+    )
     orchestrator.add_conditional_edges("integration_check", route_after_integration)
     orchestrator.add_conditional_edges("integration_dv", route_after_integration_dv)
 
