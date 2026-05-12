@@ -118,51 +118,82 @@ async def main():
             "pipeline_done": False,
         }
 
-        # Run graph, auto-resuming on interrupts (headless CI mode)
+        # Run graph, auto-resuming on interrupts (headless CI mode).
+        #
+        # LangGraph 1.x changed the dynamic-interrupt API: a node that
+        # calls ``interrupt()`` no longer reliably raises
+        # ``GraphInterrupt`` out of ``ainvoke()``. The new contract is
+        # that ``ainvoke()`` returns normally and the caller inspects
+        # ``aget_state()`` for pending interrupts. The previous loop
+        # only handled the raised case, so any node that hit
+        # ``interrupt()`` (e.g. ``integration_review`` for chip-level
+        # spec approval after each tier) would silently park the graph
+        # and ``ainvoke()`` would return without advancing. The result
+        # was: tier-N completes, integration review fires, the pipeline
+        # prints "PIPELINE COMPLETE" while tier-(N+1) blocks sit
+        # waiting forever in the queue.
+        #
+        # Fix: after each ainvoke, check the state. If interrupts are
+        # pending, resume; otherwise we're truly done. Preserves the
+        # GraphInterrupt path for any LangGraph version that still
+        # raises.
         current_input = initial_state
         while True:
             try:
                 await graph.ainvoke(current_input, graph_config)
-                break  # Graph completed normally
+                raised_interrupt = False
             except GraphInterrupt:
-                state = await graph.aget_state(graph_config)
+                raised_interrupt = True
 
-                # Collect all pending interrupts (parallel blocks may have multiple)
-                interrupts = []
-                if state and state.tasks:
-                    for task in state.tasks:
-                        for intr in task.interrupts:
-                            interrupts.append((intr.id, intr.value))
+            state = await graph.aget_state(graph_config)
 
-                if not interrupts:
+            # Collect all pending interrupts (parallel blocks may have multiple)
+            interrupts = []
+            if state and state.tasks:
+                for task in state.tasks:
+                    for intr in task.interrupts:
+                        interrupts.append((intr.id, intr.value))
+
+            if not interrupts:
+                if raised_interrupt:
+                    # Stale raise but no actual pending interrupt left;
+                    # treat as a tick and re-enter with no input.
                     log("  [AUTO] No pending interrupts found, continuing", YELLOW)
                     current_input = None
                     continue
+                break  # Graph genuinely completed
 
-                # Check the first interrupt to determine action type
-                first_payload = interrupts[0][1]
+            # Check the first interrupt to determine action type
+            first_payload = interrupts[0][1]
 
-                if first_payload.get("type") == "uarch_spec_review":
-                    names = [p.get("block_name", "?") for _, p in interrupts]
-                    log(f"  [AUTO] Auto-approving uarch specs for {', '.join(names)}", YELLOW)
-                    resume_value = {"action": "approve"}
+            if first_payload.get("type") == "uarch_spec_review":
+                names = [p.get("block_name", "?") for _, p in interrupts]
+                log(f"  [AUTO] Auto-approving uarch specs for {', '.join(names)}", YELLOW)
+                resume_value = {"action": "approve"}
+            elif first_payload.get("type") == "uarch_integration_review":
+                tier = first_payload.get("tier", "?")
+                issues = first_payload.get("issues_found", 0)
+                names = first_payload.get("block_names", [])
+                log(f"  [AUTO] Auto-approving integration review for tier {tier} "
+                    f"({len(names)} blocks, {issues} issues)", YELLOW)
+                resume_value = {"action": "approve"}
+            else:
+                block_name = first_payload.get("block_name", "?")
+                attempt = first_payload.get("attempt", 1)
+                if attempt >= MAX_ATTEMPTS:
+                    log(f"  [AUTO] Skipping {block_name} (exhausted attempts)", YELLOW)
+                    resume_value = {"action": "skip"}
                 else:
-                    block_name = first_payload.get("block_name", "?")
-                    attempt = first_payload.get("attempt", 1)
-                    if attempt >= MAX_ATTEMPTS:
-                        log(f"  [AUTO] Skipping {block_name} (exhausted attempts)", YELLOW)
-                        resume_value = {"action": "skip"}
-                    else:
-                        log(f"  [AUTO] Retrying {block_name} (attempt {attempt})", YELLOW)
-                        resume_value = {"action": "retry"}
+                    log(f"  [AUTO] Retrying {block_name} (attempt {attempt})", YELLOW)
+                    resume_value = {"action": "retry"}
 
-                # Build resume map for multiple interrupts, or plain Command for single
-                if len(interrupts) > 1:
-                    current_input = Command(
-                        resume={iid: resume_value for iid, _ in interrupts}
-                    )
-                else:
-                    current_input = Command(resume=resume_value)
+            # Build resume map for multiple interrupts, or plain Command for single
+            if len(interrupts) > 1:
+                current_input = Command(
+                    resume={iid: resume_value for iid, _ in interrupts}
+                )
+            else:
+                current_input = Command(resume=resume_value)
 
         # Extract results from final state
         final_state = await graph.aget_state(graph_config)
