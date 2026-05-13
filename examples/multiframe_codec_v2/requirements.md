@@ -20,8 +20,10 @@ Required codec features:
   `encode_image_v2()`.
 - 4x4 and 8x8 DCT-II transform support.
 - Scalar QP quantization/dequantization.
-- 4x4 and 8x8 zig-zag scan plus run-length coding.
-- Exp-Golomb run/level coding.
+- 4x4 and 8x8 zig-zag scan.
+- H.264-style CAVLC coefficient coding for TotalCoeff, TrailingOnes,
+  TotalZeros, and RunBefore. Keep Exp-Golomb only as an explicitly selectable
+  software fallback, not as the hardware entropy target.
 - Byte-oriented bitstream packing.
 - Simplified H.264-style deblocking filter on every 4-pixel boundary,
   including internal 4x4 boundaries inside selected 8x8 macroblocks.
@@ -34,7 +36,7 @@ blocks unless the architecture stage finds a clearly better decomposition:
 - `quantize_select`
 - `mode_decision`
 - `zigzag_rle_select`
-- `expgolomb_enc`
+- `cavlc_enc`
 - `block_packer`
 - `deblock_filter`
 
@@ -42,11 +44,12 @@ For each generated block, include `python_source:
 examples/multiframe_codec_v2/codec_golden.py`, a Verilog target under
 `rtl/multiframe_codec_v2/`, and a cocotb testbench target under `tb/cocotb/`.
 
-The software preflight on Mort at 128x72 showed the golden model can achieve:
+The software preflight on the 10-frame Mort GIF crop at 640x360 showed the
+CAVLC golden model can achieve:
 
-- QP24: 2.8508 bpp, 47.98 dB, 667/1440 macroblocks selected as 8x8
-- QP36: 1.1574 bpp, 39.48 dB, 635/1440 macroblocks selected as 8x8
-- QP48: 0.3964 bpp, 32.00 dB, 925/1440 macroblocks selected as 8x8
+- QP24: 2.8674 bpp, 49.16 dB, 11330/36000 macroblocks selected as 8x8
+- QP36: 1.0233 bpp, 38.76 dB, 13143/36000 macroblocks selected as 8x8
+- QP48: 0.2161 bpp, 34.04 dB, 25568/36000 macroblocks selected as 8x8
 
 Optimize for a clean, stream-oriented soft IP rather than MMIO. Do not require
 memory map, register spec, or clock-tree elaboration unless explicitly enabled.

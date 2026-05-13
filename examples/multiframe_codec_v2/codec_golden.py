@@ -5,15 +5,15 @@ Pipeline (encoder):
       -> frame_subtract: subtract 128 for I-frames, else subtract prev
       -> 4x4 fp16 DCT-II (separable, orthonormal)
       -> quantize_fp: round(coef / step) where step = 2^((qp-12)/6)
-      -> zigzag scan + run-length encode -> (run, level) pairs + EOB sentinel
-      -> Exp-Golomb encode each run + level
+      -> zigzag scan
+      -> CAVLC-style coefficient coding by default, or Exp-Golomb run/level
+         coding when entropy="expgolomb" is selected explicitly
       -> bitstream: 1-bit frame_type prefix + concatenated codewords, byte-aligned
 
 Decoder reverses everything.
 
-This file mirrors the RTL bit-exact for the back-half (expgolomb + packer); the
-DCT and quantize stages match np.round (banker's rounding) up to fp16 rounding
-in the reciprocal-step ROM.
+The default v2 path uses H.264-inspired CAVLC coefficient semantics while
+remaining a compact local bitstream, not a compliant H.264 byte stream.
 """
 import math
 import numpy as np
@@ -204,6 +204,31 @@ def unzigzag_rle_n(pairs, n):
     return np.array(inv, dtype=np.int32).reshape(n, n)
 
 
+def _zigzag_for_shape(shape):
+    if shape == (4, 4):
+        return ZIGZAG_4x4
+    if shape == (8, 8):
+        return ZIGZAG_8x8
+    raise ValueError(f"unsupported block shape {shape}; expected 4x4 or 8x8")
+
+
+def _scan_coefficients(coeffs):
+    coeffs = np.asarray(coeffs, dtype=np.int32)
+    scan = _zigzag_for_shape(tuple(coeffs.shape))
+    flat = coeffs.flatten()
+    return [int(flat[i]) for i in scan]
+
+
+def _unscan_coefficients(scanned, shape):
+    scan = _zigzag_for_shape(tuple(shape))
+    if len(scanned) != len(scan):
+        raise ValueError(f"expected {len(scan)} coefficients, got {len(scanned)}")
+    inv = [0] * len(scan)
+    for i, dst in enumerate(scan):
+        inv[dst] = int(scanned[i])
+    return np.array(inv, dtype=np.int32).reshape(shape)
+
+
 # ---------------------------------------------------------------------------
 # Exp-Golomb signed encode/decode (PyH264 semantics)
 def expgolomb_encode(v):
@@ -239,10 +264,136 @@ def expgolomb_decode_stream(bits, offset):
     return signed, offset + L
 
 
+def _ue_encode(v):
+    if v < 0:
+        raise ValueError("unsigned Exp-Golomb value must be non-negative")
+    val = v + 1
+    bit_len = val.bit_length()
+    return ("0" * (bit_len - 1)) + format(val, f"0{bit_len}b")
+
+
+def _ue_decode_stream(bits, offset):
+    n = 0
+    while offset + n < len(bits) and bits[offset + n] == "0":
+        n += 1
+    if offset + n >= len(bits):
+        return None, offset
+    end = offset + (2 * n + 1)
+    if end > len(bits):
+        return None, offset
+    return int(bits[offset:end], 2) - 1, end
+
+
+def cavlc_encode_coefficients(coeffs):
+    """Encode one 4x4 or 8x8 quantized coefficient block.
+
+    This local CAVLC model emits TotalCoeff, TrailingOnes, trailing-one signs,
+    remaining signed levels, TotalZeros, and reverse-order RunBefore values.
+    Compact Exp-Golomb codewords carry the variable fields so the stream stays
+    self-delimiting for the SocMate golden model.
+    """
+    scanned = _scan_coefficients(coeffs)
+    nonzero = [(i, v) for i, v in enumerate(scanned) if v != 0]
+    total_coeff = len(nonzero)
+    max_coeff = len(scanned)
+
+    trailing_ones = 0
+    for _pos, val in reversed(nonzero):
+        if abs(val) == 1 and trailing_ones < 3:
+            trailing_ones += 1
+        else:
+            break
+
+    bits = [_ue_encode(total_coeff * 4 + trailing_ones)]
+    if total_coeff == 0:
+        return "".join(bits)
+
+    values_rev = [v for _pos, v in reversed(nonzero)]
+    for val in values_rev[:trailing_ones]:
+        bits.append("1" if val < 0 else "0")
+    for val in values_rev[trailing_ones:]:
+        bits.append(expgolomb_encode(val))
+
+    prev = -1
+    runs = []
+    for pos, _val in nonzero:
+        runs.append(pos - prev - 1)
+        prev = pos
+    total_zeros = sum(runs)
+    if total_coeff < max_coeff:
+        bits.append(_ue_encode(total_zeros))
+
+    for run in reversed(runs[1:]):
+        bits.append(_ue_encode(run))
+    return "".join(bits)
+
+
+def cavlc_decode_coefficients(bits, offset=0, shape=(4, 4)):
+    """Decode one CAVLC coefficient block and return (coefficients, offset)."""
+    shape = tuple(shape)
+    max_coeff = len(_zigzag_for_shape(shape))
+    token, offset = _ue_decode_stream(bits, offset)
+    if token is None:
+        return None, offset
+    total_coeff = token // 4
+    trailing_ones = token % 4
+    if total_coeff > max_coeff or trailing_ones > min(3, total_coeff):
+        raise ValueError("invalid CAVLC coefficient token")
+    if total_coeff == 0:
+        return np.zeros(shape, dtype=np.int32), offset
+
+    values_rev = []
+    for _ in range(trailing_ones):
+        if offset >= len(bits):
+            return None, offset
+        values_rev.append(-1 if bits[offset] == "1" else 1)
+        offset += 1
+    for _ in range(total_coeff - trailing_ones):
+        val, offset = expgolomb_decode_stream(bits, offset)
+        if val is None:
+            return None, offset
+        values_rev.append(val)
+
+    if total_coeff < max_coeff:
+        total_zeros, offset = _ue_decode_stream(bits, offset)
+        if total_zeros is None:
+            return None, offset
+    else:
+        total_zeros = 0
+    if total_zeros > max_coeff - total_coeff:
+        raise ValueError("invalid CAVLC total_zeros")
+
+    runs_rev = []
+    zeros_left = total_zeros
+    for _ in range(total_coeff - 1):
+        run, offset = _ue_decode_stream(bits, offset)
+        if run is None:
+            return None, offset
+        if run > zeros_left:
+            raise ValueError("invalid CAVLC run_before")
+        runs_rev.append(run)
+        zeros_left -= run
+    runs_rev.append(zeros_left)
+
+    scanned = []
+    for run, val in zip(reversed(runs_rev), reversed(values_rev)):
+        scanned.extend([0] * run)
+        scanned.append(val)
+    scanned.extend([0] * (max_coeff - len(scanned)))
+    return _unscan_coefficients(scanned, shape), offset
+
+
 # ---------------------------------------------------------------------------
 # Bitstream packing per block: 1-bit frame_type + codeword stream, byte aligned
-def pack_block(pairs, frame_is_intra):
+def pack_block(pairs, frame_is_intra, entropy="expgolomb", coeffs=None):
     bits = ['1' if frame_is_intra else '0']
+    if entropy == "cavlc":
+        if coeffs is None:
+            coeffs = unzigzag_rle(pairs)
+        bits.append(cavlc_encode_coefficients(coeffs))
+        return ''.join(bits)
+    if entropy != "expgolomb":
+        raise ValueError(f"unknown entropy mode {entropy!r}")
     for run, level in pairs:
         bits.append(expgolomb_encode(run))
         bits.append(expgolomb_encode(level))
@@ -338,7 +489,46 @@ def _bits_for_pairs(pairs):
     return total
 
 
-def _code_block(blk, recon, by, bx, n, qp):
+def _bits_for_coeffs(level, pairs, entropy):
+    if entropy == "cavlc":
+        return len(cavlc_encode_coefficients(level))
+    if entropy == "expgolomb":
+        return _bits_for_pairs(pairs)
+    raise ValueError(f"unknown entropy mode {entropy!r}")
+
+
+def _append_coeff_bits(bits, level, pairs, entropy):
+    if entropy == "cavlc":
+        bits.append(cavlc_encode_coefficients(level))
+    elif entropy == "expgolomb":
+        for run, lvl in pairs:
+            bits.append(expgolomb_encode(run))
+            bits.append(expgolomb_encode(lvl))
+    else:
+        raise ValueError(f"unknown entropy mode {entropy!r}")
+
+
+def _decode_coeff_bits(bits, offset, n, entropy):
+    if entropy == "cavlc":
+        level, offset = cavlc_decode_coefficients(bits, offset, shape=(n, n))
+        if level is None:
+            raise ValueError("truncated stream while decoding CAVLC block")
+        return level, offset
+    if entropy != "expgolomb":
+        raise ValueError(f"unknown entropy mode {entropy!r}")
+    pairs = []
+    while True:
+        run, offset = expgolomb_decode_stream(bits, offset)
+        lvl, offset = expgolomb_decode_stream(bits, offset)
+        if run is None or lvl is None:
+            raise ValueError("truncated stream while decoding Exp-Golomb block")
+        pairs.append((run, lvl))
+        if run == 0 and lvl == 0:
+            break
+    return unzigzag_rle_n(pairs, n), offset
+
+
+def _code_block(blk, recon, by, bx, n, qp, entropy="cavlc"):
     top, left = _get_neighbors_n(recon, by, bx, n)
     best = None
     for mode in _available_modes_n(by, bx):
@@ -356,11 +546,12 @@ def _code_block(blk, recon, by, bx, n, qp):
         recon_blk = np.clip(pred + recon_resid, 0, 255).astype(np.int16)
         distortion = float(np.mean((blk.astype(np.float64) - recon_blk) ** 2))
         header_bits = 1 + 1 + 2
-        bit_count = header_bits + _bits_for_pairs(pairs)
+        bit_count = header_bits + _bits_for_coeffs(level, pairs, entropy)
         cost = distortion + 0.08 * step_for_qp(qp) * bit_count / (n * n)
         candidate = {
             "n": n,
             "mode": mode,
+            "level": level,
             "pairs": pairs,
             "recon": recon_blk,
             "bits": bit_count,
@@ -372,7 +563,7 @@ def _code_block(blk, recon, by, bx, n, qp):
     return best
 
 
-def _code_mb_4x4(blk8, recon, by, bx, qp):
+def _code_mb_4x4(blk8, recon, by, bx, qp, entropy="cavlc"):
     temp_recon = recon.copy()
     subblocks = []
     total_bits = 1 + 1
@@ -380,10 +571,10 @@ def _code_mb_4x4(blk8, recon, by, bx, qp):
     for dy in (0, 4):
         for dx in (0, 4):
             blk4 = blk8[dy:dy + 4, dx:dx + 4]
-            cand = _code_block(blk4, temp_recon, by + dy, bx + dx, 4, qp)
+            cand = _code_block(blk4, temp_recon, by + dy, bx + dx, 4, qp, entropy)
             temp_recon[by + dy:by + dy + 4, bx + dx:bx + dx + 4] = cand["recon"]
             subblocks.append(cand)
-            total_bits += 2 + _bits_for_pairs(cand["pairs"])
+            total_bits += 2 + _bits_for_coeffs(cand["level"], cand["pairs"], entropy)
             weighted_cost += cand["cost"] * 16.0
     recon_blk = temp_recon[by:by + 8, bx:bx + 8].copy()
     return {
@@ -397,7 +588,7 @@ def _code_mb_4x4(blk8, recon, by, bx, qp):
     }
 
 
-def encode_image_v2(pixels, qp=36, do_deblock=True):
+def encode_image_v2(pixels, qp=36, do_deblock=True, entropy="cavlc"):
     """I-frame encoder with selectable 8x8 macroblocks.
 
     Each 8x8 macroblock chooses either one 8x8 transform block or four 4x4
@@ -413,28 +604,25 @@ def encode_image_v2(pixels, qp=36, do_deblock=True):
     for by in range(0, H, 8):
         for bx in range(0, W, 8):
             blk8 = pixels[by:by + 8, bx:bx + 8].astype(np.int16)
-            cand8 = _code_block(blk8, recon, by, bx, 8, qp)
-            cand4 = _code_mb_4x4(blk8, recon, by, bx, qp)
+            cand8 = _code_block(blk8, recon, by, bx, 8, qp, entropy)
+            cand4 = _code_mb_4x4(blk8, recon, by, bx, qp, entropy)
             chosen = cand8 if cand8["cost"] <= cand4["cost"] else cand4
             bits.append("1")  # I-frame
             if chosen["n"] == 8:
                 bits.append("1")
                 bits.append(format(chosen["mode"], "02b"))
-                for run, lvl in chosen["pairs"]:
-                    bits.append(expgolomb_encode(run))
-                    bits.append(expgolomb_encode(lvl))
+                _append_coeff_bits(bits, chosen["level"], chosen["pairs"], entropy)
             else:
                 bits.append("0")
                 for sub in chosen["subblocks"]:
                     bits.append(format(sub["mode"], "02b"))
-                    for run, lvl in sub["pairs"]:
-                        bits.append(expgolomb_encode(run))
-                        bits.append(expgolomb_encode(lvl))
+                    _append_coeff_bits(bits, sub["level"], sub["pairs"], entropy)
             recon[by:by + 8, bx:bx + 8] = chosen["recon"]
             meta.append({
                 "by": by,
                 "bx": bx,
                 "block_size": 8 if chosen["n"] == 8 else 4,
+                "entropy": entropy,
                 "bits": chosen["bits"],
                 "distortion": chosen["distortion"],
             })
@@ -446,7 +634,7 @@ def encode_image_v2(pixels, qp=36, do_deblock=True):
     return bytes(int(s[i:i + 8], 2) for i in range(0, len(s), 8)), meta, filtered
 
 
-def decode_image_v2(byte_stream, H, W, qp=36, do_deblock=True):
+def decode_image_v2(byte_stream, H, W, qp=36, do_deblock=True, entropy="cavlc"):
     bits = "".join(format(b, "08b") for b in byte_stream)
     offset = 0
     out = np.zeros((H, W), dtype=np.uint8)
@@ -459,14 +647,7 @@ def decode_image_v2(byte_stream, H, W, qp=36, do_deblock=True):
             if use8:
                 mode = int(bits[offset:offset + 2], 2)
                 offset += 2
-                pairs = []
-                while True:
-                    run, offset = expgolomb_decode_stream(bits, offset)
-                    lvl, offset = expgolomb_decode_stream(bits, offset)
-                    pairs.append((run, lvl))
-                    if run == 0 and lvl == 0:
-                        break
-                level = unzigzag_rle_n(pairs, 8)
+                level, offset = _decode_coeff_bits(bits, offset, 8, entropy)
                 resid = idct_8x8(dequantize_n(level, qp))
                 top, left = _get_neighbors_n(out, by, bx, 8)
                 pred = _predictor_n(mode, top, left, 8)
@@ -476,14 +657,7 @@ def decode_image_v2(byte_stream, H, W, qp=36, do_deblock=True):
                     for dx in (0, 4):
                         mode = int(bits[offset:offset + 2], 2)
                         offset += 2
-                        pairs = []
-                        while True:
-                            run, offset = expgolomb_decode_stream(bits, offset)
-                            lvl, offset = expgolomb_decode_stream(bits, offset)
-                            pairs.append((run, lvl))
-                            if run == 0 and lvl == 0:
-                                break
-                        level = unzigzag_rle_n(pairs, 4)
+                        level, offset = _decode_coeff_bits(bits, offset, 4, entropy)
                         resid = idct_4x4(dequantize_n(level, qp))
                         top, left = _get_neighbors_n(out, by + dy, bx + dx, 4)
                         pred = _predictor_n(mode, top, left, 4)
@@ -495,7 +669,7 @@ def decode_image_v2(byte_stream, H, W, qp=36, do_deblock=True):
     return out
 
 
-def encode_image(pixels, qp=36, use_intra_pred=False):
+def encode_image(pixels, qp=36, use_intra_pred=False, entropy="expgolomb"):
     """pixels: H x W uint8.  Returns bytes + per-block metadata for debug."""
     H, W = pixels.shape
     assert H % 4 == 0 and W % 4 == 0, 'must be multiple of 4'
@@ -515,7 +689,8 @@ def encode_image(pixels, qp=36, use_intra_pred=False):
                 coef  = dct_4x4(resid)
                 level = quantize(coef, qp)
                 pairs = zigzag_rle(level)
-                bblk  = pack_block(pairs, frame_is_intra=True)
+                bblk = pack_block(pairs, frame_is_intra=True,
+                                  entropy=entropy, coeffs=level)
                 bits.append(bblk)
                 block_bits_list.append(bblk)
                 continue
@@ -538,7 +713,7 @@ def encode_image(pixels, qp=36, use_intra_pred=False):
                     best_resid = resid
                     best_pred  = pred
 
-            # Encode residual through DCT->quant->zigzag-rle->Exp-Golomb
+            # Encode residual through DCT->quant->entropy coder
             coef = dct_4x4(best_resid)
             level = quantize(coef, qp)
             pairs = zigzag_rle(level)
@@ -546,9 +721,14 @@ def encode_image(pixels, qp=36, use_intra_pred=False):
             # Bitstream: 1-bit frame_is_intra + 2-bit mode + codewords
             bblk = '1'                                     # frame_is_intra = 1
             bblk += format(best_mode, '02b')               # 2-bit mode
-            for run, lvl in pairs:
-                bblk += expgolomb_encode(run)
-                bblk += expgolomb_encode(lvl)
+            if entropy == "cavlc":
+                bblk += cavlc_encode_coefficients(level)
+            elif entropy == "expgolomb":
+                for run, lvl in pairs:
+                    bblk += expgolomb_encode(run)
+                    bblk += expgolomb_encode(lvl)
+            else:
+                raise ValueError(f"unknown entropy mode {entropy!r}")
             bits.append(bblk)
             block_bits_list.append(bblk)
 
@@ -565,7 +745,8 @@ def encode_image(pixels, qp=36, use_intra_pred=False):
     return bytes(by), block_bits_list
 
 
-def decode_image(byte_stream, H, W, qp=36, do_deblock=False, use_intra_pred=False):
+def decode_image(byte_stream, H, W, qp=36, do_deblock=False,
+                 use_intra_pred=False, entropy="expgolomb"):
     """Reverse encode_image; expects num_blocks == H*W/16."""
     bits = ''.join(format(b, '08b') for b in byte_stream)
     offset = 0
@@ -584,19 +765,25 @@ def decode_image(byte_stream, H, W, qp=36, do_deblock=False, use_intra_pred=Fals
             else:
                 mode = None
 
-            pairs = []
-            while True:
-                run, offset = expgolomb_decode_stream(bits, offset)
-                if run is None:
-                    raise ValueError('truncated stream while decoding run')
-                level, offset = expgolomb_decode_stream(bits, offset)
-                if level is None:
-                    raise ValueError('truncated stream while decoding level')
-                pairs.append((run, level))
-                if run == 0 and level == 0:
-                    break
-
-            quant = unzigzag_rle(pairs)
+            if entropy == "cavlc":
+                quant, offset = cavlc_decode_coefficients(bits, offset, shape=(4, 4))
+                if quant is None:
+                    raise ValueError("truncated stream while decoding CAVLC block")
+            elif entropy == "expgolomb":
+                pairs = []
+                while True:
+                    run, offset = expgolomb_decode_stream(bits, offset)
+                    if run is None:
+                        raise ValueError('truncated stream while decoding run')
+                    level, offset = expgolomb_decode_stream(bits, offset)
+                    if level is None:
+                        raise ValueError('truncated stream while decoding level')
+                    pairs.append((run, level))
+                    if run == 0 and level == 0:
+                        break
+                quant = unzigzag_rle(pairs)
+            else:
+                raise ValueError(f"unknown entropy mode {entropy!r}")
             coef  = dequantize(quant, qp)
             resid = idct_4x4(coef)
 
