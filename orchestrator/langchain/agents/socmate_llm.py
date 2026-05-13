@@ -830,7 +830,7 @@ class ClaudeLLM:
             self.codex_path,
             "exec",
             "--json",
-            "--config", "approval_policy='never'",
+            "--dangerously-bypass-approvals-and-sandbox",
             "--sandbox", sandbox,
             "--skip-git-repo-check",
             "-C", project_root,

@@ -232,8 +232,7 @@ class TestCommandConstruction:
             assert "--json" in cmd
             assert "-m" in cmd
             assert cmd[cmd.index("-m") + 1] == "gpt-5.5"
-            assert "--config" in cmd
-            assert "approval_policy='never'" in cmd
+            assert "--dangerously-bypass-approvals-and-sandbox" in cmd
 
 
 class TestWatchdogBehaviour:
