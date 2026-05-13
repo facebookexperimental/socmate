@@ -76,18 +76,27 @@ def preflight_check(phases: list[str] | None = None) -> dict:
 
     errors: list[str] = []
     warnings: list[str] = []
+    skip_synth = os.environ.get("SOCMATE_SKIP_SYNTH", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
     if "pipeline" in phases:
-        if not LIBERTY_FILE.exists():
-            errors.append(f"Liberty file not found: {LIBERTY_FILE}")
         if not shutil.which("verilator"):
             errors.append("verilator not found on PATH")
-        if not shutil.which("yosys"):
-            errors.append("yosys not found on PATH")
-        if not PDK_ROOT.exists():
-            errors.append(f"PDK root directory not found: {PDK_ROOT}")
-        elif not any((PDK_ROOT / v).is_dir() for v in ("sky130A", "sky130B")):
-            errors.append(f"No sky130A or sky130B variant found in {PDK_ROOT}")
+        if skip_synth:
+            warnings.append("SOCMATE_SKIP_SYNTH=1; skipping Yosys and PDK preflight checks")
+        else:
+            if not LIBERTY_FILE.exists():
+                errors.append(f"Liberty file not found: {LIBERTY_FILE}")
+            if not shutil.which("yosys"):
+                errors.append("yosys not found on PATH")
+            if not PDK_ROOT.exists():
+                errors.append(f"PDK root directory not found: {PDK_ROOT}")
+            elif not any((PDK_ROOT / v).is_dir() for v in ("sky130A", "sky130B")):
+                errors.append(f"No sky130A or sky130B variant found in {PDK_ROOT}")
 
     if "backend" in phases:
         from orchestrator.langgraph.backend_helpers import (

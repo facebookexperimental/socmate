@@ -119,7 +119,7 @@ async def run(args: argparse.Namespace) -> int:
         if state.get("status") == "error":
             print(json.dumps(state, indent=2), flush=True)
             return 1
-        if state.get("success") or state.get("status") == "done":
+        if state.get("success") and state.get("status") == "done":
             break
         if state.get("human_input_needed"):
             itype = state.get("interrupt_type", "")
