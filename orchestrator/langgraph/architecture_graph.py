@@ -72,6 +72,24 @@ def _event(state: dict, node: str, event_type: str, data: dict | None = None) ->
     write_graph_event(_pr(state), node, event_type, merged)
 
 
+def _stage_enabled(enable_env: str, legacy_skip_env: str = "") -> bool:
+    """Return whether an optional architecture stage should run.
+
+    These stages are bypassed by default for streaming soft-IP exploration.
+    Set the SOCMATE_ENABLE_* variable to 1/true/yes/on to run the stage.  The
+    older SOCMATE_SKIP_* variables are still honored as an explicit skip.
+    """
+    import os
+
+    if legacy_skip_env and os.environ.get(legacy_skip_env, "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }:
+        return False
+    return os.environ.get(enable_env, "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
@@ -928,7 +946,22 @@ async def block_diagram_node(state: ArchGraphState) -> dict:
 
 
 async def memory_map_node(state: ArchGraphState) -> dict:
-    """Generate memory map via LLM specialist."""
+    """Generate memory map via LLM specialist.
+
+    Bypassed by default for streaming designs. Set
+    ``SOCMATE_ENABLE_MEMORY_MAP=1`` to run it. The legacy
+    ``SOCMATE_SKIP_MEMORY_MAP=1`` still forces a skip.
+    """
+    if not _stage_enabled("SOCMATE_ENABLE_MEMORY_MAP", "SOCMATE_SKIP_MEMORY_MAP"):
+        _event(state, "Memory Map", "graph_node_enter", {"round": state["round"], "skipped": True})
+        empty = {"result": {"peripheral_count": 0, "peripherals": []},
+                 "rationale": "bypassed by default; set SOCMATE_ENABLE_MEMORY_MAP=1 to run"}
+        _event(state, "Memory Map", "graph_node_exit", {"round": state["round"], "skipped": True})
+        update = {"memory_map": empty, "phase": "memory_map"}
+        _persist_intermediate_state(state, update)
+        _persist_memory_map(state["project_root"], empty)
+        return update
+
     from orchestrator.architecture.specialists.memory_map import (
         analyze_memory_map,
     )
@@ -959,7 +992,21 @@ async def memory_map_node(state: ArchGraphState) -> dict:
 
 
 async def clock_tree_node(state: ArchGraphState) -> dict:
-    """Generate clock tree via LLM specialist."""
+    """Generate clock tree via LLM specialist.
+
+    Bypassed by default for streaming soft-IP exploration. Set
+    ``SOCMATE_ENABLE_CLOCK_TREE=1`` to run it.
+    """
+    if not _stage_enabled("SOCMATE_ENABLE_CLOCK_TREE", "SOCMATE_SKIP_CLOCK_TREE"):
+        _event(state, "Clock Tree", "graph_node_enter", {"round": state["round"], "skipped": True})
+        empty = {"result": {"num_domains": 1, "domains": []},
+                 "rationale": "bypassed by default; set SOCMATE_ENABLE_CLOCK_TREE=1 to run"}
+        _event(state, "Clock Tree", "graph_node_exit", {"round": state["round"], "skipped": True})
+        update = {"clock_tree": empty, "phase": "clock_tree"}
+        _persist_intermediate_state(state, update)
+        _persist_clock_tree(state["project_root"], empty)
+        return update
+
     from orchestrator.architecture.specialists.clock_tree import (
         analyze_clock_tree,
     )
@@ -989,7 +1036,22 @@ async def clock_tree_node(state: ArchGraphState) -> dict:
 
 
 async def register_spec_node(state: ArchGraphState) -> dict:
-    """Generate register spec via LLM specialist."""
+    """Generate register spec via LLM specialist.
+
+    Bypassed by default for streaming designs with no CSR surface. Set
+    ``SOCMATE_ENABLE_REGISTER_SPEC=1`` to run it. The legacy
+    ``SOCMATE_SKIP_REGISTER_SPEC=1`` still forces a skip.
+    """
+    if not _stage_enabled("SOCMATE_ENABLE_REGISTER_SPEC", "SOCMATE_SKIP_REGISTER_SPEC"):
+        _event(state, "Register Spec", "graph_node_enter", {"round": state["round"], "skipped": True})
+        empty = {"result": {"total_blocks": 0, "register_blocks": []},
+                 "rationale": "bypassed by default; set SOCMATE_ENABLE_REGISTER_SPEC=1 to run"}
+        _event(state, "Register Spec", "graph_node_exit", {"round": state["round"], "skipped": True})
+        update = {"register_spec": empty, "phase": "register_spec"}
+        _persist_intermediate_state(state, update)
+        _persist_register_spec(state["project_root"], empty)
+        return update
+
     from orchestrator.architecture.specialists.register_spec import (
         analyze_register_spec,
     )
