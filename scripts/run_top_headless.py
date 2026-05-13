@@ -54,7 +54,7 @@ def _answer_prd_questions(state: dict) -> dict:
         "target_clock": "50 MHz",
         "bus_protocol": "AXI-Stream data interfaces with simple sideband mode pins",
         "data_width": "8-bit grayscale pixels, signed residuals, fp16 transform coefficients, int16 levels",
-        "input_data_rate": "128x72 Mort GIF frames for evaluation; scalable streaming raster input",
+        "input_data_rate": "Mort GIF frames at the requirements resolution; scalable streaming raster input",
         "latency_budget": "No hard latency budget; prioritize lint/sim clean RTL and tractable area",
         "area_budget": "Fit a small soft-IP codec in Sky130; avoid SRAM-heavy or CPU-style designs",
         "power_budget": "No explicit power budget; use synchronous single-clock RTL",
