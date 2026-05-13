@@ -3,13 +3,13 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-ClaudeLLM -- Plain Python LLM client backed by the Claude Code CLI.
+ClaudeLLM -- Plain Python LLM client backed by an agent CLI.
 
 Provides a simple ``call(system, prompt) -> str`` interface that all agents
 (RTLGenerator, TestbenchGenerator, DebugAgent, TimingClosureAgent, etc.) use.
 
-Uses the ``claude`` binary (Claude Code CLI) for all LLM calls.  Install
-with: ``npm install -g @anthropic-ai/claude-code``
+Uses the ``claude`` binary (Claude Code CLI) by default. Set
+``SOCMATE_LLM_PROVIDER=codex`` to use ``codex exec`` instead.
 
 Telemetry
 ---------
@@ -313,6 +313,34 @@ def _parse_stream_json(stdout: str) -> tuple[str, dict]:
     return final_text, out_usage
 
 
+def _parse_codex_json(stdout: str) -> tuple[str, dict]:
+    """Parse Codex CLI ``exec --json`` output.
+
+    Codex emits one JSON event per line.  The final answer is carried by
+    ``item.completed`` events whose item is an ``agent_message``; usage
+    arrives on ``turn.completed``.  If multiple agent messages are present,
+    the last one is the final response.
+    """
+    final_text = ""
+    usage: dict = {}
+    for raw in stdout.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = _json.loads(raw)
+        except _json.JSONDecodeError:
+            continue
+        ev_type = obj.get("type")
+        if ev_type == "item.completed":
+            item = obj.get("item", {}) or {}
+            if item.get("type") == "agent_message":
+                final_text = item.get("text", "") or final_text
+        elif ev_type == "turn.completed":
+            usage = obj.get("usage") or usage
+    return final_text, usage
+
+
 # ---------------------------------------------------------------------------
 # Model name mapping: short names -> Claude CLI model IDs
 # ---------------------------------------------------------------------------
@@ -326,20 +354,47 @@ _CLI_MODEL_MAP = {
     "haiku-3.5": "claude-haiku-4-5-20251001", # legacy alias -> current Haiku
 }
 
+_CODEX_MODEL_MAP = {
+    # Preserve existing SocMate model tiers when switching providers.
+    "opus-4.7": "gpt-5.5",
+    "opus-4.6": "gpt-5.5",
+    "sonnet-4.6": "gpt-5.4-mini",
+    "sonnet-4.5": "gpt-5.4-mini",
+    "haiku-4.5": "gpt-5.4-mini",
+    "haiku-3.5": "gpt-5.4-mini",
+}
+
 # Default model used by every agent unless overridden. Set the SOCMATE_MODEL
 # environment variable (to either a short name above or a full Claude CLI
 # model ID) to override at runtime without code changes -- useful when the
 # default version is unavailable on a fresh CLI install.
 DEFAULT_MODEL = "opus-4.7"
+DEFAULT_CODEX_MODEL = "gpt-5.5"
+
+# Cheaper model for per-block agents (uarch, rtl, testbench, diagnose, lint
+# fix, tb fix).  Integration and review agents still call DEFAULT_MODEL.
+# Override with SOCMATE_BLOCK_MODEL env var.
+BLOCK_MODEL = "sonnet-4.6"
 
 
-def _resolve_model(model: str) -> str:
-    """Map short model name to Claude CLI model ID.
+def _resolve_model(model: str, provider: str = "claude_cli") -> str:
+    """Map short model name to the selected CLI model ID.
 
     Honours the ``SOCMATE_MODEL`` environment variable as a runtime
     override: if set, it wins over whatever the caller passed in. Empty
     or unset model strings fall back to ``DEFAULT_MODEL``.
     """
+    if provider == "codex_cli":
+        env_override = (
+            os.environ.get("SOCMATE_CODEX_MODEL", "").strip()
+            or os.environ.get("SOCMATE_MODEL", "").strip()
+        )
+        if env_override:
+            return _CODEX_MODEL_MAP.get(env_override, env_override)
+        if not model:
+            return DEFAULT_CODEX_MODEL
+        return _CODEX_MODEL_MAP.get(model, model)
+
     env_override = os.environ.get("SOCMATE_MODEL", "").strip()
     if env_override:
         model = env_override
@@ -348,11 +403,31 @@ def _resolve_model(model: str) -> str:
     return _CLI_MODEL_MAP.get(model, model)
 
 
+def block_model() -> str:
+    """Return the model to use for per-block agents.
+
+    Defaults to ``BLOCK_MODEL`` (Sonnet) but can be overridden with the
+    ``SOCMATE_BLOCK_MODEL`` env var.  Used by uarch/rtl/testbench/diagnose
+    agents so the bulk of a run goes through Sonnet, with Opus reserved
+    for the chip-level integration step.
+    """
+    return os.environ.get("SOCMATE_BLOCK_MODEL", "").strip() or BLOCK_MODEL
+
+
 def _detect_provider() -> str:
     """Detect which LLM provider to use.
 
-    Currently only Claude CLI is supported.
+    Defaults to Claude CLI.  Set ``SOCMATE_LLM_PROVIDER=codex`` (or
+    ``codex_cli``) to route calls through ``codex exec``.
     """
+    provider = os.environ.get("SOCMATE_LLM_PROVIDER", "").strip().lower()
+    if provider in {"codex", "codex_cli"}:
+        return "codex_cli"
+    if provider in {"claude", "claude_cli", ""}:
+        return "claude_cli"
+    raise ValueError(
+        "Unsupported SOCMATE_LLM_PROVIDER={!r}. Use 'claude' or 'codex'.".format(provider)
+    )
     return "claude_cli"
 
 
@@ -393,6 +468,29 @@ def _find_claude_binary() -> str:
     )
 
 
+def _find_codex_binary() -> str:
+    """Locate the Codex CLI binary."""
+    env_path = os.environ.get("CODEX_CLI_PATH", "")
+    if env_path and os.path.isfile(env_path) and os.access(env_path, os.X_OK):
+        return env_path
+
+    which_path = shutil.which("codex")
+    if which_path:
+        return which_path
+
+    candidates = [
+        os.path.expanduser("~/.local/bin/codex"),
+        os.path.expanduser("~/.npm/bin/codex"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+
+    raise FileNotFoundError(
+        "Codex CLI not found. Install Codex CLI or set CODEX_CLI_PATH to the binary location."
+    )
+
+
 # ---------------------------------------------------------------------------
 # ClaudeLLM -- plain Python class (no LangChain)
 # ---------------------------------------------------------------------------
@@ -419,19 +517,21 @@ class ClaudeLLM:
         self,
         model: str = DEFAULT_MODEL,
         claude_path: str = "",
+        codex_path: str = "",
         timeout: int = 1200,
         max_turns: int = 50,
         disable_tools: bool = False,
     ) -> None:
         self.model = model or DEFAULT_MODEL
         self.claude_path = claude_path
+        self.codex_path = codex_path
         self.timeout = timeout
         self.max_turns = max_turns
         self.disable_tools = disable_tools
 
         self._provider = _detect_provider()
-        logger.info("ClaudeLLM using Claude CLI provider.")
-        if not self.claude_path:
+        logger.info("ClaudeLLM using %s provider.", self._provider)
+        if self._provider == "claude_cli" and not self.claude_path:
             self.claude_path = os.environ.get("CLAUDE_CLI_PATH", "")
             if not self.claude_path:
                 # Let FileNotFoundError propagate -- we'd rather crash
@@ -440,6 +540,11 @@ class ClaudeLLM:
                 # opaque ``PermissionError: [Errno 13] Permission denied: ''``.
                 self.claude_path = _find_claude_binary()
                 logger.info(f"Found Claude CLI at: {self.claude_path}")
+        elif self._provider == "codex_cli" and not self.codex_path:
+            self.codex_path = os.environ.get("CODEX_CLI_PATH", "")
+            if not self.codex_path:
+                self.codex_path = _find_codex_binary()
+                logger.info(f"Found Codex CLI at: {self.codex_path}")
 
     async def call(
         self,
@@ -465,7 +570,8 @@ class ClaudeLLM:
             str(Path(__file__).resolve().parent.parent.parent),
         )
         self._write_llm_event(project_root, "llm_start", {
-            "model": _resolve_model(self.model),
+            "model": _resolve_model(self.model, self._provider),
+            "provider": self._provider,
             "run_name": run_name,
             "prompt_chars": len(prompt),
             "system_chars": len(system),
@@ -480,7 +586,8 @@ class ClaudeLLM:
 
             # Write llm_end event
             self._write_llm_event(project_root, "llm_end", {
-                "model": _resolve_model(self.model),
+                "model": _resolve_model(self.model, self._provider),
+                "provider": self._provider,
                 "run_name": run_name,
                 "output_chars": len(text),
             })
@@ -493,7 +600,8 @@ class ClaudeLLM:
 
             # Write llm_error event
             self._write_llm_event(project_root, "llm_error", {
-                "model": _resolve_model(self.model),
+                "model": _resolve_model(self.model, self._provider),
+                "provider": self._provider,
                 "run_name": run_name,
                 "error": str(e)[:500],
             })
@@ -521,6 +629,16 @@ class ClaudeLLM:
         system_prompt: str,
         user_prompt: str,
     ) -> str:
+        if self._provider == "codex_cli":
+            return self._generate_via_codex_cli(system_prompt, user_prompt)
+
+        return self._generate_via_claude_cli(system_prompt, user_prompt)
+
+    def _generate_via_claude_cli(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> str:
         """Call the Claude CLI (``claude -p``) synchronously.
 
         Uses ``Popen`` with a polling watchdog instead of blocking
@@ -538,7 +656,7 @@ class ClaudeLLM:
         System messages are passed via ``--system-prompt``.
         Human/AI messages are concatenated and piped to stdin.
         """
-        resolved_model = _resolve_model(self.model)
+        resolved_model = _resolve_model(self.model, self._provider)
 
         cmd: list[str] = [
             self.claude_path,
@@ -693,6 +811,150 @@ class ClaudeLLM:
         )
 
         return output
+
+    def _generate_via_codex_cli(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> str:
+        """Call the Codex CLI (``codex exec``) synchronously."""
+        resolved_model = _resolve_model(self.model, self._provider)
+
+        project_root = os.environ.get(
+            "SOCMATE_PROJECT_ROOT",
+            str(Path(__file__).resolve().parent.parent.parent),
+        )
+        sandbox = os.environ.get("SOCMATE_CODEX_SANDBOX", "workspace-write").strip()
+
+        cmd: list[str] = [
+            self.codex_path,
+            "exec",
+            "--json",
+            "--config", "approval_policy='never'",
+            "--sandbox", sandbox,
+            "--skip-git-repo-check",
+            "-C", project_root,
+            "-m", resolved_model,
+            "-",
+        ]
+
+        combined_prompt = self._build_codex_prompt(system_prompt, user_prompt)
+
+        logger.debug(
+            "Codex CLI invocation: model=%s, prompt_len=%d, system_len=%d",
+            resolved_model,
+            len(user_prompt),
+            len(system_prompt),
+        )
+        logger.info("Codex CLI cmd (first 200): %s", " ".join(cmd)[:200])
+
+        t0 = _time_mod.monotonic()
+        try:
+            output, stderr_text, returncode, elapsed, timed_out, stalled, usage = (
+                self._run_cli_with_watchdog(
+                    cmd, combined_prompt, project_root, resolved_model, t0,
+                )
+            )
+        except FileNotFoundError:
+            elapsed = _time_mod.monotonic() - t0
+            error_msg = "codex CLI binary not found"
+            output = (
+                "[ClaudeLLM error: codex CLI binary not found. "
+                "Install Codex CLI or set CODEX_CLI_PATH]"
+            )
+            _log_llm_call(
+                model=resolved_model,
+                provider="codex_cli",
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response=output,
+                duration_s=elapsed,
+                timeout=self.timeout,
+                error=error_msg,
+            )
+            return output
+
+        if timed_out or stalled:
+            reason = "stalled" if stalled else "timed out"
+            error_msg = f"codex CLI {reason} after {elapsed:.0f}s"
+            if stderr_text:
+                error_msg += f" | stderr: {stderr_text[:300]}"
+            if output:
+                error_msg += f" | partial stdout: {output[:300]}"
+            full_output = f"[ClaudeLLM error: {error_msg}]"
+            logger.error("Codex CLI %s: %s", reason, error_msg)
+            _log_llm_call(
+                model=resolved_model,
+                provider="codex_cli",
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response=full_output,
+                duration_s=elapsed,
+                timeout=self.timeout,
+                error=error_msg,
+                timed_out=True,
+                usage=usage,
+            )
+            self._write_llm_event(project_root, f"llm_{reason}", {
+                "model": resolved_model,
+                "provider": "codex_cli",
+                "elapsed_s": round(elapsed, 1),
+                "partial_stdout_len": len(output),
+                "stderr": stderr_text[:500],
+                "partial_stdout": output[:500],
+            })
+            return full_output
+
+        elapsed = _time_mod.monotonic() - t0
+        logger.info(
+            "Codex CLI output: retcode=%s, stdout_len=%d, first100=%r",
+            returncode,
+            len(output),
+            output[:100],
+        )
+        if returncode != 0:
+            logger.warning("Codex CLI exited with code %s: %s", returncode, stderr_text[:500])
+
+        if not output:
+            error_msg = (
+                f"[ClaudeLLM error: codex CLI returned empty response. "
+                f"exit_code={returncode}, stderr: {stderr_text[:500]}]"
+            )
+            output = error_msg
+            logger.error("LLM empty response: %s", error_msg)
+            self._write_llm_event(project_root, "llm_empty_response", {
+                "model": resolved_model,
+                "provider": "codex_cli",
+                "exit_code": returncode,
+                "stderr": stderr_text[:500],
+                "error": error_msg[:300],
+            })
+
+        _log_llm_call(
+            model=resolved_model,
+            provider="codex_cli",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response=output,
+            duration_s=elapsed,
+            timeout=self.timeout,
+            usage=usage,
+        )
+
+        return output
+
+    @staticmethod
+    def _build_codex_prompt(system_prompt: str, user_prompt: str) -> str:
+        if not system_prompt:
+            return user_prompt
+        return (
+            "<system>\n"
+            f"{system_prompt}\n"
+            "</system>\n\n"
+            "<user>\n"
+            f"{user_prompt}\n"
+            "</user>\n"
+        )
 
     # ------------------------------------------------------------------
     # Popen + watchdog internals
@@ -887,10 +1149,12 @@ class ClaudeLLM:
         stderr_text = "".join(stderr_chunks).strip()
         returncode = process.returncode if process.returncode is not None else -1
 
-        # Parse the stream-json output.  On clean success the `result`
-        # event yields canonical text + usage; on stall/timeout we fall
-        # back to whatever assistant text leaked through.
-        response_text, usage = _parse_stream_json(stdout_text)
+        # Parse provider JSON output. On stall/timeout we fall back to
+        # whatever assistant text leaked through.
+        if self._provider == "codex_cli":
+            response_text, usage = _parse_codex_json(stdout_text)
+        else:
+            response_text, usage = _parse_stream_json(stdout_text)
         if not response_text:
             # Stream-json parsing produced nothing useful — surface raw
             # stdout (may be empty / a CLI error string) so downstream

@@ -20,12 +20,17 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 from orchestrator.langchain.agents.socmate_llm import (
     ClaudeLLM,
+    DEFAULT_CODEX_MODEL,
     DEFAULT_MODEL,
+    _CODEX_MODEL_MAP,
     _CLI_MODEL_MAP,
     _detect_provider,
+    _parse_codex_json,
     _resolve_model,
     _register_process,
     _unregister_process,
@@ -33,6 +38,12 @@ from orchestrator.langchain.agents.socmate_llm import (
     _active_processes_lock,
     kill_active_cli_processes,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_provider_env(monkeypatch):
+    monkeypatch.delenv("SOCMATE_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("SOCMATE_CODEX_MODEL", raising=False)
 
 
 class TestModelNameMapping:
@@ -76,10 +87,38 @@ class TestModelNameMapping:
         monkeypatch.setenv("SOCMATE_MODEL", "")
         assert _resolve_model("opus-4.7") == "claude-opus-4-7"
 
+    def test_codex_opus_maps_to_gpt_55(self):
+        assert _resolve_model("opus-4.7", "codex_cli") == "gpt-5.5"
+
+    def test_codex_default_model_constant(self):
+        assert DEFAULT_CODEX_MODEL == "gpt-5.5"
+        assert _CODEX_MODEL_MAP["opus-4.7"] == DEFAULT_CODEX_MODEL
+
+    def test_socmate_codex_model_env_overrides_passed_value(self, monkeypatch):
+        monkeypatch.setenv("SOCMATE_CODEX_MODEL", "gpt-5.5")
+        assert _resolve_model("sonnet-4.6", "codex_cli") == "gpt-5.5"
+
 
 class TestProviderDetection:
-    def test_always_returns_claude_cli(self):
+    def test_defaults_to_claude_cli(self, monkeypatch):
+        monkeypatch.delenv("SOCMATE_LLM_PROVIDER", raising=False)
         assert _detect_provider() == "claude_cli"
+
+    def test_codex_provider_env(self, monkeypatch):
+        monkeypatch.setenv("SOCMATE_LLM_PROVIDER", "codex")
+        assert _detect_provider() == "codex_cli"
+
+
+class TestCodexJsonParsing:
+    def test_parse_codex_json_agent_message_and_usage(self):
+        stdout = (
+            '{"type":"thread.started","thread_id":"t"}\n'
+            '{"type":"item.completed","item":{"type":"agent_message","text":"hello"}}\n'
+            '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}\n'
+        )
+        text, usage = _parse_codex_json(stdout)
+        assert text == "hello"
+        assert usage == {"input_tokens": 10, "output_tokens": 2}
 
 
 class TestProcessRegistry:
@@ -174,6 +213,27 @@ class TestCommandConstruction:
             assert "stream-json" in cmd
             # CLI requires --verbose alongside stream-json under --print
             assert "--verbose" in cmd
+
+    @patch("orchestrator.langchain.agents.socmate_llm._find_codex_binary")
+    def test_codex_exec_flags_and_gpt_55_model(self, mock_find, monkeypatch):
+        monkeypatch.setenv("SOCMATE_LLM_PROVIDER", "codex")
+        monkeypatch.delenv("SOCMATE_CODEX_MODEL", raising=False)
+        monkeypatch.delenv("SOCMATE_MODEL", raising=False)
+        mock_find.return_value = "/usr/bin/codex"
+
+        model = ClaudeLLM(model="opus-4.7", timeout=10)
+
+        with patch.object(model, "_run_cli_with_watchdog") as mock_watchdog:
+            mock_watchdog.return_value = ("test output", "", 0, 1.0, False, False, {})
+            model._generate_via_cli("system prompt", "hello")
+
+            cmd = mock_watchdog.call_args[0][0]
+            assert cmd[:2] == ["/usr/bin/codex", "exec"]
+            assert "--json" in cmd
+            assert "-m" in cmd
+            assert cmd[cmd.index("-m") + 1] == "gpt-5.5"
+            assert "--config" in cmd
+            assert "approval_policy='never'" in cmd
 
 
 class TestWatchdogBehaviour:
