@@ -130,7 +130,12 @@ async def run(args: argparse.Namespace) -> int:
             elif itype == "final_review":
                 print("[arch] auto-approving final review", flush=True)
                 print(await mcp.resume_architecture("accept"), flush=True)
-            elif itype in ("architecture_review_diagram", "architecture_review_needed"):
+            elif itype in (
+                "architecture_review_diagram",
+                "architecture_review_constraints",
+                "architecture_review_exhausted",
+                "architecture_review_needed",
+            ):
                 print("[arch] accepting architecture interrupt", flush=True)
                 print(await mcp.resume_architecture("accept"), flush=True)
             else:
