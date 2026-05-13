@@ -933,6 +933,7 @@ def _build_pipeline_ask_question(payload: dict) -> dict:
     # ---- integration_dv_failure ----
     elif payload_type == "integration_dv_failure":
         sim_log = payload.get("sim_log", "")[-500:]
+        supported = payload.get("supported_actions", [])
 
         q_text = (
             f"Integration DV simulation failed.\n\n"
@@ -949,7 +950,10 @@ def _build_pipeline_ask_question(payload: dict) -> dict:
                     "options": [
                         {"label": "Retry", "description": "Regenerate testbench and re-simulate"},
                         {"label": "Fix RTL", "description": "RTL was edited; re-run sim only"},
-                        {"label": "Skip", "description": "Proceed without integration DV"},
+                        *(
+                            [{"label": "Skip", "description": "Proceed without integration DV"}]
+                            if "skip" in supported else []
+                        ),
                         {"label": "Abort", "description": "Stop the pipeline"},
                     ],
                     "multiSelect": False,
@@ -959,10 +963,52 @@ def _build_pipeline_ask_question(payload: dict) -> dict:
         out["resume_mapping"] = {
             "Retry": {"action": "retry"},
             "Fix RTL": {"action": "fix_rtl", "rtl_fix_description": "<describe fix>"},
-            "Skip": {"action": "skip"},
             "Abort": {"action": "abort"},
         }
+        if "skip" in supported:
+            out["resume_mapping"]["Skip"] = {"action": "skip"}
         out["interrupt_summary"] = "Integration DV simulation failed."
+
+    # ---- validation_dv_failure ----
+    elif payload_type == "validation_dv_failure":
+        sim_log = payload.get("sim_log", "")[-500:]
+        supported = payload.get("supported_actions", [])
+
+        q_text = (
+            f"Validation DV failed while checking ERS/KPI requirements.\n\n"
+            f"Sim log (last 500 chars):\n{sim_log}"
+        )
+
+        out["ask_question"] = {
+            "title": "Validation DV Failed",
+            "questions": [
+                {
+                    "id": "validation_dv_action",
+                    "question": q_text,
+                    "header": "Validation DV",
+                    "options": [
+                        {"label": "Retry", "description": "Regenerate validation testbench and re-simulate"},
+                        {"label": "Fix RTL", "description": "RTL was edited; re-run validation sim"},
+                        {"label": "Fix TB", "description": "Validation testbench was edited; re-run validation sim"},
+                        *(
+                            [{"label": "Skip", "description": "Proceed without validation DV"}]
+                            if "skip" in supported else []
+                        ),
+                        {"label": "Abort", "description": "Stop the pipeline"},
+                    ],
+                    "multiSelect": False,
+                }
+            ],
+        }
+        out["resume_mapping"] = {
+            "Retry": {"action": "retry"},
+            "Fix RTL": {"action": "fix_rtl", "rtl_fix_description": "<describe fix>"},
+            "Fix TB": {"action": "fix_tb", "rtl_fix_description": "<describe fix>"},
+            "Abort": {"action": "abort"},
+        }
+        if "skip" in supported:
+            out["resume_mapping"]["Skip"] = {"action": "skip"}
+        out["interrupt_summary"] = "Validation DV failed."
 
     return out
 
@@ -2003,6 +2049,29 @@ async def get_pipeline_state() -> str:
             "skipped_reason": integration_result.get("reason"),
         }
 
+    integration_dv_result = values.get("integration_dv_result")
+    if integration_dv_result:
+        result["integration_dv_result"] = {
+            "passed": integration_dv_result.get("passed"),
+            "skipped": integration_dv_result.get("skipped", False),
+            "skipped_by_user": integration_dv_result.get("skipped_by_user", False),
+            "test_count": integration_dv_result.get("test_count"),
+            "testbench_path": integration_dv_result.get("testbench_path"),
+            "sim_log_path": integration_dv_result.get("sim_log_path"),
+        }
+
+    validation_dv_result = values.get("validation_dv_result")
+    if validation_dv_result:
+        result["validation_dv_result"] = {
+            "passed": validation_dv_result.get("passed"),
+            "skipped": validation_dv_result.get("skipped", False),
+            "skipped_by_user": validation_dv_result.get("skipped_by_user", False),
+            "test_count": validation_dv_result.get("test_count"),
+            "requirement_count": validation_dv_result.get("requirement_count"),
+            "testbench_path": validation_dv_result.get("testbench_path"),
+            "sim_log_path": validation_dv_result.get("sim_log_path"),
+        }
+
     # Add failure trend summary if there are failures
     failure_summary = _aggregate_failure_summary()
     if failure_summary and failure_summary.get("total_failures", 0) > 0:
@@ -2038,7 +2107,15 @@ async def get_pipeline_state() -> str:
                 integration.get("skipped", False)
                 and total == passed
             )
-            if integration_ok or integration_skipped_single_block:
+            integration_dv = values.get("integration_dv_result") or {}
+            validation_dv = values.get("validation_dv_result") or {}
+            integration_dv_ok = integration_dv.get("passed") is True
+            validation_dv_ok = validation_dv.get("passed") is True
+            if (
+                (integration_ok or integration_skipped_single_block)
+                and integration_dv_ok
+                and validation_dv_ok
+            ):
                 result["next_action"] = "start_backend"
                 result["next_action_reason"] = (
                     f"All {passed}/{total} blocks passed frontend "
@@ -2049,7 +2126,8 @@ async def get_pipeline_state() -> str:
                         else "Integration check skipped "
                              "(single-block design)."
                     )
-                    + " Call start_backend() to proceed to PnR/DRC/LVS."
+                    + " Integration DV and Validation DV passed. "
+                    "Call start_backend() to proceed to PnR/DRC/LVS."
                 )
 
     return json.dumps(result, indent=2, default=str)
@@ -2159,7 +2237,7 @@ async def resume_pipeline(
             "viterbi_decoder": "skip"}'). When provided, each interrupted
             block gets its own action instead of using the global *action*.
     """
-    valid_actions = {"retry", "fix_rtl", "add_constraint", "skip", "abort",
+    valid_actions = {"retry", "fix_rtl", "fix_tb", "add_constraint", "skip", "abort",
                      "approve", "revise"}
     if action not in valid_actions:
         return json.dumps({
@@ -4343,6 +4421,17 @@ _PIPELINE_NODE_META: dict[str, dict[str, Any]] = {
         "description": (
             "Lead DV agent generates and runs a cocotb integration testbench "
             "against the top-level integrated design."
+        ),
+    },
+    "validation_dv": {
+        "type": "agent",
+        "prompt_file": "orchestrator/langchain/prompts/validation_dv.md",
+        "uses_interrupt": True,
+        "display_name": "Validate ERS/KPIs",
+        "description": (
+            "Lead Validation DV agent generates and runs a cocotb testbench "
+            "that verifies ERS requirements and measurable application KPIs "
+            "after smoke/integration DV."
         ),
     },
     # Block subgraph nodes (nested inside process_block)

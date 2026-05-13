@@ -37,6 +37,8 @@ from orchestrator.langgraph.pipeline_graph import (
     route_decision,
     route_after_human,
     route_after_integration_review,
+    route_after_integration_dv,
+    route_after_validation_dv,
     route_next_tier,
     init_block_node,
     block_done_node,
@@ -210,9 +212,28 @@ class TestGraphConstruction:
         expected = [
             "init_tier", "process_block", "integration_review",
             "advance_tier", "pipeline_complete",
+            "integration_check", "integration_dv", "validation_dv",
         ]
         for name in expected:
             assert name in node_names, f"Missing orchestrator node: {name}"
+
+    def test_integration_dv_routes_to_validation_on_pass(self):
+        result = route_after_integration_dv({
+            "integration_dv_result": {"passed": True},
+        })
+        assert result == "validation_dv"
+
+    def test_integration_dv_retries_on_fix_action(self):
+        result = route_after_integration_dv({
+            "integration_dv_result": {"passed": False, "action_taken": "fix_tb"},
+        })
+        assert result == "integration_dv"
+
+    def test_validation_dv_retries_on_fix_action(self):
+        result = route_after_validation_dv({
+            "validation_dv_result": {"passed": False, "action_taken": "fix_rtl"},
+        })
+        assert result == "validation_dv"
 
     def test_block_subgraph_has_expected_nodes(self):
         subgraph = build_block_subgraph().compile()

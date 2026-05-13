@@ -991,6 +991,7 @@ class TestGraphConstruction:
         node_names = list(graph.get_graph().nodes.keys())
         assert "integration_check" in node_names
         assert "integration_dv" in node_names
+        assert "validation_dv" in node_names
 
 
 # ---------------------------------------------------------------------------

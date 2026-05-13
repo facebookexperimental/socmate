@@ -860,6 +860,54 @@ async def generate_integration_testbench(
     return result
 
 
+async def generate_validation_testbench(
+    design_name: str,
+    top_rtl_path: str,
+    modules: dict[str, "VerilogModule"],
+    connections: list[dict],
+    block_rtl_paths: dict[str, str],
+    ers_context: str,
+) -> dict:
+    """Generate an ERS/KPI validation cocotb testbench via Lead Validation DV.
+
+    Returns:
+        dict with: tb_path (str), testbench_path (str), test_count (int).
+    """
+    from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL
+    from orchestrator.langchain.agents.validation_dv_generator import (
+        ValidationDVGenerator,
+    )
+
+    top_rtl_source = Path(top_rtl_path).read_text(encoding="utf-8")
+
+    block_summaries = []
+    for name, mod in sorted(modules.items()):
+        block_summaries.append({
+            "name": name,
+            "port_count": len(mod.ports),
+            "ports": [p.to_dict() for p in mod.ports],
+        })
+
+    tb_dir = PROJECT_ROOT / "tb" / "validation"
+    tb_dir.mkdir(parents=True, exist_ok=True)
+    output_path = str(tb_dir / f"test_{design_name}_validation.py")
+
+    agent = ValidationDVGenerator(model=DEFAULT_MODEL, temperature=0.1)
+    result = await agent.generate(
+        design_name=design_name,
+        top_rtl_path=top_rtl_path,
+        top_rtl_source=top_rtl_source,
+        block_summaries=block_summaries,
+        connections=connections,
+        ers_context=ers_context,
+        block_rtl_paths=block_rtl_paths,
+        output_path=output_path,
+    )
+
+    result["testbench_path"] = result.get("tb_path", output_path)
+    return result
+
+
 def run_integration_simulation(
     design_name: str,
     top_rtl_path: str,

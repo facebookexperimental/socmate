@@ -55,6 +55,7 @@ from __future__ import annotations
 import asyncio
 import json
 import operator
+import os
 import re
 from pathlib import Path
 from typing import Annotated, Optional, TypedDict
@@ -68,6 +69,7 @@ from orchestrator.utils import smart_truncate
 from orchestrator.langgraph.integration_helpers import (
     discover_block_rtl,
     generate_integration_testbench,
+    generate_validation_testbench,
     lint_top_level,
     load_architecture_connections,
     parse_verilog_ports,
@@ -297,6 +299,9 @@ class OrchestratorState(TypedDict):
 
     # Integration DV results ───────────────────────────────────────────────
     integration_dv_result: Optional[dict]  # set by integration_dv node
+
+    # Validation DV results ────────────────────────────────────────────────
+    validation_dv_result: Optional[dict]  # set by validation_dv node
 
     # Terminal ──────────────────────────────────────────────────────────────
     pipeline_done: bool
@@ -2569,7 +2574,6 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
                 "retry",        # regenerate testbench + re-simulate
                 "fix_rtl",      # outer agent fixed RTL, re-run sim only
                 "fix_tb",       # outer agent fixed testbench, re-run sim only
-                "skip",         # proceed to backend without integration DV
                 "abort",        # stop the pipeline
             ],
             "outer_agent_guidance": (
@@ -2595,6 +2599,13 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
                 "sim_log": sim_result.get("log_path", ""),
             },
         }
+
+        if os.environ.get("SOCMATE_ALLOW_SKIP_INTEGRATION_DV", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            payload["supported_actions"].insert(-1, "skip")
 
         response = interrupt(payload)
 
@@ -2628,12 +2639,270 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
         return {"integration_dv_result": dv_result}
 
 
+def _load_ers_validation_context(project_root: str) -> tuple[str, int]:
+    """Load ERS context for validation DV and count likely RTL-checkable reqs."""
+    ers_path = Path(project_root) / ".socmate" / "ers_spec.json"
+    if not ers_path.exists():
+        return "", 0
+
+    raw = ers_path.read_text(encoding="utf-8")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw, 0
+
+    ers = data.get("ers", data)
+    req_count = 0
+
+    def _count_value(value) -> None:
+        nonlocal req_count
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str):
+                    req_count += 1
+                elif isinstance(item, dict):
+                    if item.get("requirement") or item.get("id"):
+                        req_count += 1
+                    _count_value(item)
+        elif isinstance(value, dict):
+            for nested in value.values():
+                _count_value(nested)
+
+    for key in (
+        "functional_requirements",
+        "per_block_requirements",
+        "verification_requirements",
+        "validation_dv_requirements",
+        "validation_kpis",
+    ):
+        _count_value(ers.get(key))
+
+    return json.dumps(data, indent=2), req_count
+
+
 def route_after_integration_dv(state: OrchestratorState) -> str:
-    """Route after integration DV: always terminal (backend is separate)."""
+    """Route after smoke/integration DV into ERS/KPI validation DV."""
+    result = state.get("integration_dv_result") or {}
+    if result.get("passed") is True:
+        return "validation_dv"
+    if result.get("action_taken") in ("retry", "fix_rtl", "fix_tb"):
+        return "integration_dv"
     return END
 
 
 route_after_integration_dv.__edge_labels__ = {
+    "validation_dv": "Validation DV",
+    "integration_dv": "Retry",
+    END: "DONE",
+}
+
+
+# ---------------------------------------------------------------------------
+# Node: validation_dv  (Lead Validation DV -- verifies ERS + KPIs)
+# ---------------------------------------------------------------------------
+
+async def validation_dv_node(state: OrchestratorState) -> dict:
+    """Generate and run an ERS/KPI validation-level cocotb testbench.
+
+    This stage follows smoke/integration DV. It validates measurable
+    application intent preserved in the ERS and records requirement coverage.
+    """
+    pr = state.get("project_root", str(PROJECT_ROOT))
+    integration_result = state.get("integration_result") or {}
+
+    top_rtl_path = integration_result.get("top_rtl_path", "")
+    design_name = integration_result.get("design_name", "chip_top")
+    block_rtl_paths = integration_result.get("block_rtl_paths", {})
+
+    write_graph_event(pr, "Validation DV", "graph_node_enter", {
+        "design_name": design_name,
+        "block_count": len(block_rtl_paths),
+    })
+
+    with _tracer.start_as_current_span("Validation DV") as span:
+        span.set_attribute("design_name", design_name)
+
+        if not top_rtl_path or not Path(top_rtl_path).exists():
+            msg = "No top-level RTL available for Validation DV"
+            log(f"  [VALIDATION-DV] FAILED -- {msg}", RED)
+            return {"validation_dv_result": {
+                "passed": False,
+                "error": msg,
+                "phase": "preflight",
+            }}
+
+        if len(block_rtl_paths) < 1:
+            msg = "No block RTL files available for Validation DV"
+            log(f"  [VALIDATION-DV] FAILED -- {msg}", RED)
+            return {"validation_dv_result": {
+                "passed": False,
+                "error": msg,
+                "phase": "preflight",
+            }}
+
+        ers_context, requirement_count = _load_ers_validation_context(pr)
+        if not ers_context:
+            msg = "No ERS found; Validation DV cannot verify requirements"
+            log(f"  [VALIDATION-DV] FAILED -- {msg}", RED)
+            return {"validation_dv_result": {
+                "passed": False,
+                "error": msg,
+                "phase": "missing_ers",
+            }}
+
+        connections, _ = await asyncio.to_thread(load_architecture_connections, pr)
+
+        modules = {}
+        for block_name, rtl_path in block_rtl_paths.items():
+            mod = await asyncio.to_thread(parse_verilog_ports, rtl_path)
+            if mod.name:
+                modules[block_name] = mod
+
+        log("  [VALIDATION-DV] Generating ERS/KPI validation testbench...", YELLOW)
+        try:
+            tb_result = await generate_validation_testbench(
+                design_name=design_name,
+                top_rtl_path=top_rtl_path,
+                modules=modules,
+                connections=connections,
+                block_rtl_paths=block_rtl_paths,
+                ers_context=smart_truncate(ers_context, 30000),
+            )
+        except Exception as e:
+            log(f"  [VALIDATION-DV] Testbench generation failed: {e}", RED)
+            write_graph_event(pr, "Validation DV", "graph_node_exit", {
+                "error": str(e), "phase": "tb_generation",
+            })
+            return {"validation_dv_result": {
+                "passed": False,
+                "error": f"Validation testbench generation failed: {e}",
+                "phase": "tb_generation",
+                "requirement_count": requirement_count,
+            }}
+
+        tb_path = tb_result.get("testbench_path", "")
+        test_count = tb_result.get("test_count", 0)
+        log(f"  [VALIDATION-DV] Generated ({test_count} tests): {tb_path}", GREEN)
+        span.set_attribute("test_count", test_count)
+        span.set_attribute("requirement_count", requirement_count)
+
+        log("  [VALIDATION-DV] Running validation simulation...", YELLOW)
+        sim_result = await asyncio.to_thread(
+            run_integration_simulation,
+            design_name, top_rtl_path, block_rtl_paths, tb_path,
+        )
+
+        passed = sim_result.get("passed", False)
+        sim_log = sim_result.get("log", "")
+
+        if passed:
+            log(f"\n{'='*60}", GREEN)
+            log("  VALIDATION DV PASSED", GREEN)
+            log(f"  {test_count} tests, ERS requirements covered", GREEN)
+            log(f"{'='*60}\n", GREEN)
+            write_graph_event(pr, "Validation DV", "graph_node_exit", {
+                "passed": True,
+                "test_count": test_count,
+                "requirement_count": requirement_count,
+                "log_path": sim_result.get("log_path", ""),
+            })
+            return {"validation_dv_result": {
+                "passed": True,
+                "test_count": test_count,
+                "requirement_count": requirement_count,
+                "testbench_path": tb_path,
+                "sim_log_path": sim_result.get("log_path", ""),
+                "design_name": design_name,
+            }}
+
+        log("  [VALIDATION-DV] FAILED", RED)
+        for line in sim_log.split("\n")[-10:]:
+            if line.strip():
+                log(f"    {line.strip()}", RED)
+
+        payload = {
+            "type": "validation_dv_failure",
+            "design_name": design_name,
+            "top_rtl_path": top_rtl_path,
+            "testbench_path": tb_path,
+            "test_count": test_count,
+            "requirement_count": requirement_count,
+            "sim_log": sim_log[-3000:],
+            "sim_log_path": sim_result.get("log_path", ""),
+            "block_rtl_paths": block_rtl_paths,
+            "supported_actions": [
+                "retry",
+                "fix_rtl",
+                "fix_tb",
+                "abort",
+            ],
+            "outer_agent_guidance": (
+                "Validation DV failed after smoke/integration DV passed. "
+                "Diagnose whether the failure is a real ERS/KPI miss, an RTL "
+                "bug, or an over/under-constrained validation testbench. Fix "
+                "RTL with action='fix_rtl' or fix the generated validation "
+                "testbench with action='fix_tb'. Do not skip this stage unless "
+                "the pipeline is explicitly configured to permit validation "
+                "skips."
+            ),
+            "reference_files": {
+                "top_rtl": top_rtl_path,
+                "testbench": tb_path,
+                "sim_log": sim_result.get("log_path", ""),
+                "ers": str(Path(pr) / ".socmate" / "ers_spec.json"),
+            },
+        }
+
+        if os.environ.get("SOCMATE_ALLOW_SKIP_VALIDATION_DV", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            payload["supported_actions"].insert(-1, "skip")
+
+        response = interrupt(payload)
+        action = response.get("action", "retry")
+        write_graph_event(pr, "Validation DV", "graph_node_exit", {
+            "action": action,
+            "passed": False,
+            "test_count": test_count,
+            "requirement_count": requirement_count,
+        })
+
+        dv_result = {
+            "passed": False,
+            "test_count": test_count,
+            "requirement_count": requirement_count,
+            "testbench_path": tb_path,
+            "sim_log_path": sim_result.get("log_path", ""),
+            "design_name": design_name,
+            "action_taken": action,
+        }
+
+        if action == "skip":
+            dv_result["skipped_by_user"] = True
+            log("  [VALIDATION-DV] Skipped by explicit configuration", YELLOW)
+        elif action == "abort":
+            dv_result["aborted"] = True
+            log("  [VALIDATION-DV] Aborted", RED)
+        elif action in ("retry", "fix_rtl", "fix_tb"):
+            fix_desc = response.get("rtl_fix_description", "")
+            log(f"  [VALIDATION-DV] Fix applied: {fix_desc}", GREEN)
+            dv_result["fix_applied"] = fix_desc
+
+        return {"validation_dv_result": dv_result}
+
+
+def route_after_validation_dv(state: OrchestratorState) -> str:
+    """Route after validation DV: terminal frontend pipeline."""
+    result = state.get("validation_dv_result") or {}
+    if result.get("action_taken") in ("retry", "fix_rtl", "fix_tb"):
+        return "validation_dv"
+    return END
+
+
+route_after_validation_dv.__edge_labels__ = {
+    "validation_dv": "Retry",
     END: "DONE",
 }
 
@@ -2679,6 +2948,7 @@ def build_pipeline_graph(checkpointer=None):
     orchestrator.add_node("pipeline_complete", pipeline_complete_node)
     orchestrator.add_node("integration_check", integration_check_node)
     orchestrator.add_node("integration_dv", integration_dv_node)
+    orchestrator.add_node("validation_dv", validation_dv_node)
 
     # Edges
     orchestrator.add_edge(START, "init_tier")
@@ -2693,5 +2963,6 @@ def build_pipeline_graph(checkpointer=None):
     )
     orchestrator.add_conditional_edges("integration_check", route_after_integration)
     orchestrator.add_conditional_edges("integration_dv", route_after_integration_dv)
+    orchestrator.add_conditional_edges("validation_dv", route_after_validation_dv)
 
     return orchestrator.compile(checkpointer=checkpointer)

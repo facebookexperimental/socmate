@@ -1559,6 +1559,25 @@ class TestBuildPipelineAskQuestion:
         assert "Retry" in labels
         assert "Fix RTL" in labels
 
+    def test_validation_dv_failure_structured(self):
+        from orchestrator.mcp_server import _build_pipeline_ask_question
+
+        payload = {
+            "type": "validation_dv_failure",
+            "sim_log": "FAIL: KPI-001 PSNR below threshold",
+            "supported_actions": ["retry", "fix_rtl", "fix_tb", "abort"],
+        }
+
+        result = _build_pipeline_ask_question(payload)
+
+        aq = result["ask_question"]
+        assert aq["title"] == "Validation DV Failed"
+        labels = [o["label"] for o in aq["questions"][0]["options"]]
+        assert "Retry" in labels
+        assert "Fix RTL" in labels
+        assert "Fix TB" in labels
+        assert "Skip" not in labels
+
     def test_unknown_type_returns_empty(self):
         from orchestrator.mcp_server import _build_pipeline_ask_question
 

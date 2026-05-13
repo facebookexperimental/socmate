@@ -13,13 +13,13 @@ Produce a JSON object with a single key `questions`.  Each question
 is an object with:
   - id:          short snake_case identifier (e.g. "target_technology")
   - category:    one of "technology", "speed_and_feeds", "area",
-                 "power", "dataflow"
+                 "power", "dataflow", "validation_kpi"
   - question:    the question text
   - context:     why this matters for SoC sizing
   - options:     list of suggested answers (may be empty for free-form)
   - required:    true/false — whether the PRD cannot be written without it
 
-You MUST include at least one question for EACH of the five categories:
+You MUST include at least one question for EACH of the six categories:
   1. **technology** — target PDK / process node from the available list
   2. **speed_and_feeds** — data rates, throughput, latency requirements,
      clock frequency targets
@@ -28,6 +28,11 @@ You MUST include at least one question for EACH of the five categories:
      leakage constraints (or "no constraint" if unconstrained)
   5. **dataflow** — data path topology (pipeline? streaming? packet?),
      buffering strategy, bus widths, DMA requirements
+  6. **validation_kpi** — at least one measurable application-intent KPI
+     that validation DV can test against RTL simulation or a referenced
+     golden model. This is required; examples include max output error,
+     minimum PSNR, compression ratio range, throughput, latency, decoded
+     frame/sample count, packet ordering, or protocol compliance.
 
 Ask as many questions as needed to fully specify the design.  Prefer
 concrete, quantitative questions over vague ones.
@@ -88,6 +93,15 @@ Output format (Phase 2):
       "<requirement 1>",
       "<requirement 2>"
     ],
+    "validation_kpis": [
+      {{
+        "id": "KPI-001",
+        "metric": "<measurable application-intent metric>",
+        "threshold": "<numeric pass/fail threshold or range>",
+        "test_method": "<how validation DV should measure it>",
+        "source": "<human answer or original requirement>"
+      }}
+    ],
     "constraints": [
       "<constraint 1>",
       "<constraint 2>"
@@ -107,3 +121,7 @@ genuinely unknown numeric values).  The PRD you produce will be the
 primary input to downstream architecture specialists (SAD, FRD,
 Block Diagram) — if information is missing from the PRD, those
 agents have no way to recover it.
+
+The PRD MUST preserve every human-provided measurable validation KPI in
+`validation_kpis`. If the user did not provide any measurable application
+KPI, keep it as an open item and do not invent a fake pass/fail target.

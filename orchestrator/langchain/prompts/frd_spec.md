@@ -85,9 +85,15 @@ A bulleted list specifying how each functional requirement can be
 verified in simulation or on silicon.  Must also cover:
 - How PHYS-NNN requirements are verified (DRC/LVS tool runs)
 - How MPW-NNN requirements are verified (precheck tool run)
+- How each PRD validation KPI is verified by validation DV, including the
+  measurable metric, threshold, stimulus, reference model if any, and pass/fail
+  criterion
 
 GUIDELINES:
 - Every requirement MUST have a measurable acceptance criterion
+- Every human-provided validation KPI from the PRD MUST become a measurable
+  FRD requirement with an ID and acceptance criterion. Do not weaken, drop, or
+  replace it with a vague qualitative statement.
 - Use concrete numbers: "latency < 100 us", "throughput >= 1 Gbps",
   "drift < 1 deg/min", NOT vague statements like "low latency"
 - Derive requirements from the PRD's functional_requirements and

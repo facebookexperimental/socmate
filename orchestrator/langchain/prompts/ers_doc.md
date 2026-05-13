@@ -92,6 +92,17 @@ Produce a JSON object with the following structure:
     "verification_requirements": [
       "<what must be verified and how>"
     ],
+    "validation_dv_requirements": [
+      {{
+        "id": "VAL-001",
+        "requirement": "<ERS requirement or preserved user KPI>",
+        "measurable_kpi": "<metric name>",
+        "threshold": "<numeric pass/fail threshold or range>",
+        "test_method": "<how validation DV must measure this in RTL simulation>",
+        "reference": "<golden model path, self-checking rule, or expected vector>",
+        "covers": ["<FRD/PRD requirement IDs or descriptions>"]
+      }}
+    ],
     "open_items": [
       "<unresolved engineering items>"
     ]
@@ -105,6 +116,14 @@ GUIDELINES:
   depth that the upstream documents don't have
 - Every functional requirement from the FRD should map to specific
   per-block engineering requirements
+- Every human-provided measurable application KPI from the PRD/FRD must be
+  preserved as an ERS requirement in `validation_dv_requirements`. Do not drop
+  or dilute user intent. If no measurable KPI was provided, record an open item
+  stating that validation DV cannot close application intent until the human
+  supplies one.
+- `validation_dv_requirements` must be written so a DV agent can run RTL
+  simulation and decide pass/fail using measured data. Include metric,
+  threshold/range, stimulus, reference/golden model, and coverage mapping.
 - Include interface protocols (AXI-Stream, dedicated pins, etc.)
   for each block based on the block diagram connections
 - Reset convention, clock domain assignments from the clock tree

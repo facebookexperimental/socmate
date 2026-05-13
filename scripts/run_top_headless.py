@@ -32,22 +32,49 @@ def _answer_prd_questions(state: dict) -> dict:
     answers: dict[str, str] = {}
     ask = state.get("ask_question") or {}
 
+    rd_kpi_answer = (
+        "Validation DV must preserve the Mort GIF RD targets from the prompt: "
+        "software golden QP24 about 2.8674 bpp at PSNR >= 49.0 dB, QP36 "
+        "about 1.0233 bpp at PSNR >= 38.0 dB, and QP48 about 0.2161 bpp at "
+        "PSNR >= 34.0 dB. The hardware validation run should measure emitted "
+        "bitstream size and reconstructed-frame PSNR against the golden model "
+        "and fail if PSNR/bpp materially misses these targets."
+    )
+
+    def _maybe_answer_freeform_kpi(item: dict) -> None:
+        qid = item.get("id")
+        if not qid or qid in answers:
+            return
+        category = str(item.get("category", "")).lower()
+        text = f"{item.get('question', '')} {item.get('context', '')}".lower()
+        if (
+            "validation_kpi" in category
+            or "kpi" in qid
+            or "psnr" in text
+            or "bpp" in text
+            or "rate" in text and "distortion" in text
+        ):
+            answers[qid] = rd_kpi_answer
+
     for item in ask.get("auto_answerable", []):
         qid = item.get("id")
         if qid:
             answers[qid] = item.get("suggested_answer", "")
+        _maybe_answer_freeform_kpi(item)
 
     for item in ask.get("remaining_choice_questions", []):
         qid = item.get("id")
         opts = item.get("options") or []
         if qid and opts:
             answers[qid] = opts[0]
+        _maybe_answer_freeform_kpi(item)
 
     for item in ask.get("questions", []):
         qid = item.get("id")
         opts = item.get("options") or []
         if qid and opts:
             answers[qid] = opts[0].get("label", "") if isinstance(opts[0], dict) else str(opts[0])
+        _maybe_answer_freeform_kpi(item)
 
     defaults = {
         "target_technology": "SkyWater Sky130, sky130_fd_sc_hd, Verilog-2005",
@@ -58,6 +85,10 @@ def _answer_prd_questions(state: dict) -> dict:
         "latency_budget": "No hard latency budget; prioritize lint/sim clean RTL and tractable area",
         "area_budget": "Fit a small soft-IP codec in Sky130; avoid SRAM-heavy or CPU-style designs",
         "power_budget": "No explicit power budget; use synchronous single-clock RTL",
+        "validation_kpi": rd_kpi_answer,
+        "rd_validation_kpi": rd_kpi_answer,
+        "quality_kpi": rd_kpi_answer,
+        "psnr_bpp_kpi": rd_kpi_answer,
     }
     for key, value in defaults.items():
         answers.setdefault(key, value)
@@ -165,6 +196,7 @@ async def run(args: argparse.Namespace) -> int:
             state.get("current_tier"),
             state.get("interrupt_type"),
             state.get("pending_interrupt_count"),
+            tuple(state.get("next_nodes") or []),
         )
         if digest != last_pipeline:
             print("[pipeline]", json.dumps({
@@ -173,13 +205,23 @@ async def run(args: argparse.Namespace) -> int:
                 "tier": state.get("current_tier"),
                 "interrupt": state.get("interrupt_type"),
                 "pending_interrupts": state.get("pending_interrupt_count"),
+                "next_nodes": state.get("next_nodes") or [],
             }, indent=2), flush=True)
             last_pipeline = digest
 
         if state.get("status") == "error":
             print(json.dumps(state, indent=2), flush=True)
             return 1
-        if state.get("pipeline_done") or state.get("status") == "done":
+        next_nodes = state.get("next_nodes") or []
+        if state.get("status") == "done" and next_nodes:
+            next_node = next_nodes[0]
+            print(f"[pipeline] continuing pending graph node: {next_node}", flush=True)
+            result = _json_loads(await mcp.restart_node(next_node))
+            print(json.dumps(result, indent=2), flush=True)
+            if "error" in result:
+                return 1
+            continue
+        if (state.get("pipeline_done") or state.get("status") == "done") and not next_nodes:
             print("[top] pipeline finished", flush=True)
             print(json.dumps(state, indent=2), flush=True)
             return 0
