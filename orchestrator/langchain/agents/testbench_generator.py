@@ -44,7 +44,9 @@ class TestbenchGeneratorAgent:
     Now has access to uArch spec and constraints (previously invisible).
     """
 
-    def __init__(self, model: str = DEFAULT_MODEL, temperature: float = 0.1):
+    def __init__(self, model: str | None = None, temperature: float = 0.1):
+        from orchestrator.langchain.agents.socmate_llm import block_model
+        model = model or block_model()
         # 1800s default; bump via SOCMATE_TB_TIMEOUT env var for complex blocks
         # whose testbenches need many turns of tool use.
         self.llm = ClaudeLLM(

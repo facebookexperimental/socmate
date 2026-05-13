@@ -320,7 +320,9 @@ async def generate_uarch_spec(
     else:
         python_source = ""
 
-    agent = UarchSpecGenerator(model=DEFAULT_MODEL, temperature=0.2)
+    # Block-level: use the block_model() default (Sonnet); pipe DEFAULT_MODEL
+    # would force Opus and is wasteful for per-block work.
+    agent = UarchSpecGenerator(temperature=0.2)
     result = await agent.generate(
         block_name=block["name"],
         python_source=python_source,
@@ -879,9 +881,9 @@ async def diagnose_failure(
 ) -> dict:
     """Run DebugAgent to analyze failure -- disk-first, agent reads all files."""
     from orchestrator.langchain.agents.debug_agent import DebugAgent
-    from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL
 
-    agent = DebugAgent(model=DEFAULT_MODEL, temperature=0.1)
+    # Diagnose runs per-block on sim/synth failures; use Sonnet not Opus.
+    agent = DebugAgent(temperature=0.1)
     return await agent.analyze(
         block_name=block_name,
         phase=phase,

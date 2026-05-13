@@ -43,7 +43,9 @@ else:
 class UarchSpecGenerator:
     """Agent for generating microarchitecture specifications."""
 
-    def __init__(self, model: str = DEFAULT_MODEL, temperature: float = 0.2):
+    def __init__(self, model: str | None = None, temperature: float = 0.2):
+        from orchestrator.langchain.agents.socmate_llm import block_model
+        model = model or block_model()
         self.llm = ClaudeLLM(
             model=model,
             timeout=scaled(2700, env="SOCMATE_UARCH_TIMEOUT"),

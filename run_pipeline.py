@@ -63,9 +63,14 @@ async def main():
     log(f"{'#'*60}\n", CYAN)
 
     # Check prerequisites
-    if not LIBERTY_FILE.exists():
+    # SOCMATE_SKIP_SYNTH=1 lets you run RTL+sim only on a host with no PDK.
+    # synthesize_node honors the same env var and short-circuits to success.
+    import os as _os
+    skip_synth = _os.environ.get("SOCMATE_SKIP_SYNTH") == "1"
+    if not skip_synth and not LIBERTY_FILE.exists():
         log("ERROR: Sky130 PDK not found at .pdk/sky130A/", RED)
         log("Run: pip install volare && volare enable --pdk sky130 --pdk-root .pdk", RED)
+        log("Or:  SOCMATE_SKIP_SYNTH=1 to skip synthesis (RTL + sim only)", RED)
         sys.exit(1)
 
     if not shutil.which("verilator"):

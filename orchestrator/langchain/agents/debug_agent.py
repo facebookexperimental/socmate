@@ -105,7 +105,9 @@ class DebugAgent:
     and updated constraints back to disk.
     """
 
-    def __init__(self, model: str = DEFAULT_MODEL, temperature: float = 0.1):
+    def __init__(self, model: str | None = None, temperature: float = 0.1):
+        from orchestrator.langchain.agents.socmate_llm import block_model
+        model = model or block_model()
         self.llm = ClaudeLLM(model=model, timeout=900)
 
     async def analyze(

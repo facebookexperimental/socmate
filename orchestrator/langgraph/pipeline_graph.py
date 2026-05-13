@@ -896,6 +896,13 @@ async def synthesize_node(state: BlockState) -> dict:
     block = state["current_block"]
     block_name = block["name"]
 
+    # Honor SOCMATE_SKIP_SYNTH=1 so hosts with no Sky130 PDK can still
+    # complete RTL + sim.  Treat as a no-op success.
+    import os as _os
+    if _os.environ.get("SOCMATE_SKIP_SYNTH") == "1":
+        log(f"  [SYNTH] Skipped (SOCMATE_SKIP_SYNTH=1) for {block_name}", YELLOW)
+        return {"synth_success": True, "synth_gate_count": 0, "phase": "synth"}
+
     rtl_path = state.get("rtl_path", "")
     if not rtl_path or not Path(rtl_path).exists():
         log("  [SYNTH] Skipped -- RTL file not found", RED)
