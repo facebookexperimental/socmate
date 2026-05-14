@@ -1823,8 +1823,11 @@ async def integration_review_node(state: OrchestratorState) -> dict:
         issues_fixed = result.get("issues_fixed", 0)
     except Exception as exc:
         review_summary = f"Integration review failed: {exc}"
-        issues_found = 0
+        issues_found = 1
         issues_fixed = 0
+        review_failed = True
+    else:
+        review_failed = False
 
     log(f"  [INTEGRATION REVIEW] {review_summary[:200]}", GREEN if issues_found == 0 else YELLOW)
 
@@ -1841,6 +1844,7 @@ async def integration_review_node(state: OrchestratorState) -> dict:
         "review_summary": review_summary,
         "issues_found": issues_found,
         "issues_fixed": issues_fixed,
+        "review_failed": review_failed,
         "supported_actions": ["approve", "revise", "abort"],
         "outer_agent_guidance": (
             "The Integration Agent has reviewed all uArch specs for "
@@ -1854,7 +1858,7 @@ async def integration_review_node(state: OrchestratorState) -> dict:
 
     response = interrupt(payload)
     action = response.get("action", "abort")
-    if action == "revise" and issues_found == 0:
+    if action == "revise" and issues_found == 0 and not review_failed:
         log(
             "  [INTEGRATION REVIEW] Clean review returned revise; "
             "treating as approve",
@@ -1864,6 +1868,7 @@ async def integration_review_node(state: OrchestratorState) -> dict:
 
     write_graph_event(pr, "Integration Review", "graph_node_exit", {
         "action": action, "issues_found": issues_found,
+        "review_failed": review_failed,
     })
 
     if action == "abort":
@@ -1872,7 +1877,10 @@ async def integration_review_node(state: OrchestratorState) -> dict:
         log("  [INTEGRATION REVIEW] Revision requested — "
             "use restart_block to re-generate affected specs", YELLOW)
 
-    return {"integration_review_action": action}
+    return {
+        "integration_review_action": action,
+        "integration_review_failed": review_failed,
+    }
 
 
 async def advance_tier_node(state: OrchestratorState) -> dict:
@@ -2040,15 +2048,22 @@ async def pipeline_complete_node(state: OrchestratorState) -> dict:
 
         resume = interrupt(payload)
 
-        # Honor the abort action so a partial-completion gate cannot be
-        # bypassed by a no-op resume.  ``supported_actions`` advertised by
-        # the payload is ["retry", "abort"]; only the explicit retry path
-        # should let us continue to integration_check.
-        if isinstance(resume, dict) and resume.get("action") == "abort":
-            log(f"  [PIPELINE] Aborted at gate with "
-                f"{passed}/{expected} blocks passed; not proceeding to "
-                f"integration.", RED)
-            return {"pipeline_done": False, "pipeline_aborted": True}
+        action = resume.get("action") if isinstance(resume, dict) else "abort"
+        if action == "retry":
+            log(
+                f"  [PIPELINE] Retry requested at incomplete gate with "
+                f"{passed}/{expected} blocks passed. Stopping graph so the "
+                f"outer controller can restart failed blocks; not proceeding "
+                f"to integration.",
+                YELLOW,
+            )
+        else:
+            log(
+                f"  [PIPELINE] Aborted at gate with {passed}/{expected} "
+                f"blocks passed; not proceeding to integration.",
+                RED,
+            )
+        return {"pipeline_done": False, "pipeline_aborted": True}
 
     return {"pipeline_done": True}
 
@@ -2077,15 +2092,47 @@ async def integration_check_node(state: OrchestratorState) -> dict:
     pr = state.get("project_root", str(PROJECT_ROOT))
     completed = state.get("completed_blocks", [])
     passed_blocks = [b for b in completed if b.get("success")]
+    block_queue = state.get("block_queue", [])
+    expected_blocks = len(block_queue) if block_queue else len(completed)
 
     write_graph_event(pr, "Integration Check", "graph_node_enter", {
         "total_blocks": len(completed),
         "passed_blocks": len(passed_blocks),
+        "expected_blocks": expected_blocks,
     })
 
     with _tracer.start_as_current_span("Integration Check") as span:
         span.set_attribute("total_blocks", len(completed))
         span.set_attribute("passed_blocks", len(passed_blocks))
+        span.set_attribute("expected_blocks", expected_blocks)
+
+        if expected_blocks and len(passed_blocks) < expected_blocks:
+            failed_names = [
+                b.get("name", "unknown") for b in completed
+                if not b.get("success")
+            ]
+            completed_names = {b.get("name") for b in completed}
+            missing_names = [
+                b.get("name", "unknown") for b in block_queue
+                if b.get("name") not in completed_names
+            ]
+            log(
+                "  [INTEGRATION] Refusing partial integration: "
+                f"{len(passed_blocks)}/{expected_blocks} blocks passed; "
+                f"failed={failed_names}, missing={missing_names}",
+                RED,
+            )
+            result = {
+                "aborted": True,
+                "error": "partial_block_set",
+                "error_count": max(1, expected_blocks - len(passed_blocks)),
+                "passed_blocks": len(passed_blocks),
+                "expected_blocks": expected_blocks,
+                "failed_blocks": failed_names,
+                "missing_blocks": missing_names,
+            }
+            write_graph_event(pr, "Integration Check", "graph_node_exit", result)
+            return {"integration_result": result}
 
         connections, design_name = await asyncio.to_thread(
             load_architecture_connections, pr

@@ -114,7 +114,7 @@ def _write_decision_escalation(kind: str, state: dict, allowed_actions: list[str
 
 
 def _triage_agent_enabled() -> bool:
-    value = os.environ.get("SOCMATE_HEADLESS_TRIAGE_AGENT", "1").strip().lower()
+    value = os.environ.get("SOCMATE_HEADLESS_TRIAGE_AGENT", "0").strip().lower()
     return value not in {"0", "false", "no", "off", "none"}
 
 
@@ -569,6 +569,7 @@ async def run(args: argparse.Namespace) -> int:
                 isinstance(payload, dict)
                 and payload.get("type") == "uarch_integration_review"
                 and int(payload.get("issues_found", 0) or 0) == 0
+                and not payload.get("review_failed")
             ):
                 print("[pipeline] auto-approving clean uarch integration review", flush=True)
                 print(await mcp.resume_pipeline(action="approve"), flush=True)

@@ -522,6 +522,46 @@ class TestRouteAfterIntegrationReview:
 
         assert result["integration_review_action"] == "approve"
 
+    @pytest.mark.asyncio
+    async def test_review_exception_blocks_auto_approval(self, tmp_path, monkeypatch):
+        from orchestrator.langchain.agents import integration_review_agent
+
+        def fake_init(self, *args, **kwargs):
+            pass
+
+        async def fake_review(self, block_names, project_root):
+            raise RuntimeError("usage limit")
+
+        captured_payload = {}
+
+        def fake_interrupt(payload):
+            captured_payload.update(payload)
+            return {"action": "revise"}
+
+        monkeypatch.setattr(
+            integration_review_agent.IntegrationReviewAgent,
+            "__init__",
+            fake_init,
+        )
+        monkeypatch.setattr(
+            integration_review_agent.IntegrationReviewAgent,
+            "review",
+            fake_review,
+        )
+        monkeypatch.setattr(pipeline_graph, "interrupt", fake_interrupt)
+
+        result = await pipeline_graph.integration_review_node({
+            "project_root": str(tmp_path),
+            "block_queue": [{"name": "adder32", "tier": 1}],
+            "tier_list": [1],
+            "current_tier_index": 0,
+        })
+
+        assert captured_payload["review_failed"] is True
+        assert captured_payload["issues_found"] == 1
+        assert result["integration_review_action"] == "revise"
+        assert result["integration_review_failed"] is True
+
 
 class TestRouteAfterIntegration:
     def test_clean_integration_goes_to_dv(self):
@@ -538,6 +578,28 @@ class TestRouteAfterIntegration:
         assert pipeline_graph.route_after_integration({
             "integration_result": {"lint_clean": True, "error_count": 1}
         }) == "__end__"
+
+    @pytest.mark.asyncio
+    async def test_partial_block_set_refuses_integration(self, tmp_path):
+        result = await pipeline_graph.integration_check_node({
+            "project_root": str(tmp_path),
+            "completed_blocks": [
+                {"name": "a", "success": True},
+                {"name": "b", "success": False},
+            ],
+            "block_queue": [
+                {"name": "a"},
+                {"name": "b"},
+                {"name": "c"},
+            ],
+        })
+
+        integration_result = result["integration_result"]
+        assert integration_result["aborted"] is True
+        assert integration_result["error"] == "partial_block_set"
+        assert integration_result["error_count"] == 2
+        assert integration_result["failed_blocks"] == ["b"]
+        assert integration_result["missing_blocks"] == ["c"]
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +645,26 @@ class TestInternalNodes:
         state = {"completed_blocks": [{"name": "a", "success": True}]}
         result = await pipeline_complete_node(state)
         assert result["pipeline_done"] is True
+
+    @pytest.mark.asyncio
+    async def test_pipeline_complete_retry_does_not_proceed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            pipeline_graph,
+            "interrupt",
+            lambda payload: {"action": "retry"},
+        )
+
+        result = await pipeline_complete_node({
+            "project_root": str(tmp_path),
+            "completed_blocks": [
+                {"name": "a", "success": True},
+                {"name": "b", "success": False},
+            ],
+            "block_queue": [{"name": "a"}, {"name": "b"}],
+        })
+
+        assert result["pipeline_done"] is False
+        assert result["pipeline_aborted"] is True
 
     @pytest.mark.asyncio
     async def test_block_done_success(self, tmp_path):
