@@ -62,6 +62,13 @@ nets. To handle this:
    {netgen_bin} -batch lvs "{spice_path} {design_name}" "{verilog_path} {design_name}" {netgen_setup} {output_dir}/{design_name}_lvs.rpt
    ```
 
+   Use Netgen's native Verilog reader for `{verilog_path}` first. Do not
+   translate the gate-level Verilog into an ad hoc SPICE netlist unless Netgen
+   cannot read the Verilog and the report proves that translation is required.
+   The extracted SPICE and schematic must compare the same top cell name,
+   `{design_name}`; a `{design_name}_flat` vs `{design_name}` comparison is a
+   setup error, not a design failure.
+
 3. If Netgen fails, read the error and try to fix (common issues:
    module name mismatch, missing power pins in Verilog, invalid net names)
 

@@ -33,12 +33,16 @@ All outputs go in: `{output_dir}/`
 1. Write a Magic TCL script to `{output_dir}/drc_{design_name}.tcl` that:
    - Loads the routed DEF: `def read {routed_def_path}`
    - Loads Sky130 standard cell GDS: `gds read {cell_gds}`
-   - Flattens the design: `flatten {design_name}_flat; load {design_name}_flat`
+   - For DRC only, you may flatten the design: `flatten {design_name}_flat; load {design_name}_flat`
    - Runs DRC: `drc check; drc catchup`
    - Saves DRC report: `drc listall why {output_dir}/magic_drc.rpt`
    - Counts violations: `set drc_count [drc count total]; puts "DRC_COUNT: $drc_count"`
    - Writes GDS: `gds write {output_dir}/{design_name}.gds`
-   - Extracts SPICE: `extract all; ext2spice lvs; ext2spice -o {output_dir}/{design_name}.spice`
+   - Extracts LVS SPICE from a cell named `{design_name}`. Do not leave the
+     LVS SPICE top cell named `{design_name}_flat`; if you flattened for DRC,
+     reload `{design_name}` before extraction or rename the top `.subckt` and
+     `.ends` back to `{design_name}`.
+   - Runs: `extract all; ext2spice lvs; ext2spice -o {output_dir}/{design_name}.spice`
 
 2. Run: `{magic_bin} -dnull -noconsole -rcfile {magic_rc} {output_dir}/drc_{design_name}.tcl`
 

@@ -1324,7 +1324,9 @@ async def decide_node(state: BackendState) -> dict:
         span.set_attribute("block_name", block_name)
         span.set_attribute("attempt", attempt)
 
-        if debug_result.get("escalate"):
+        if debug_result.get("escalate") and attempt < max_attempts:
+            action = "ask_human"
+        elif debug_result.get("escalate"):
             action = "escalate"
         elif attempt >= max_attempts:
             action = "escalate"
