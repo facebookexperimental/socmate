@@ -28,9 +28,13 @@ def _json_loads(text: str) -> dict:
     return value if isinstance(value, dict) else {"value": value}
 
 
-def _answer_prd_questions(state: dict) -> dict:
+def _answer_prd_questions(state: dict, requirements: str = "") -> dict:
     answers: dict[str, str] = {}
     ask = state.get("ask_question") or {}
+
+    requirements_text = str(requirements or state.get("requirements", "") or "").lower()
+    is_codec = any(token in requirements_text for token in ("h.264", "codec", "mort gif", "psnr", "bpp"))
+    is_transformer = any(token in requirements_text for token in ("transformer", "llama2", "tinystories", "int4", "qspi"))
 
     rd_kpi_answer = (
         "Validation DV must preserve the Mort GIF RD targets from the prompt: "
@@ -40,6 +44,14 @@ def _answer_prd_questions(state: dict) -> dict:
         "bitstream size and reconstructed-frame PSNR against the golden model "
         "and fail if PSNR/bpp materially misses these targets."
     )
+    transformer_kpi_answer = (
+        "Validation DV must preserve the transformer accelerator KPIs from "
+        "the prompt: bit-exact INT4/INT8 matmul over randomized tiles, "
+        "bit-exact single-block checkpoint tensors within documented "
+        "fixed-point tolerance, QSPI bandwidth/token-latency accounting, "
+        "default on-chip SRAM budget no greater than 64 KB, and no on-chip "
+        "weight storage beyond a prefetched tile plus metadata."
+    )
 
     def _maybe_answer_freeform_kpi(item: dict) -> None:
         qid = item.get("id")
@@ -47,7 +59,7 @@ def _answer_prd_questions(state: dict) -> dict:
             return
         category = str(item.get("category", "")).lower()
         text = f"{item.get('question', '')} {item.get('context', '')}".lower()
-        if (
+        if is_codec and (
             "validation_kpi" in category
             or "kpi" in qid
             or "psnr" in text
@@ -55,6 +67,15 @@ def _answer_prd_questions(state: dict) -> dict:
             or "rate" in text and "distortion" in text
         ):
             answers[qid] = rd_kpi_answer
+        elif is_transformer and (
+            "validation_kpi" in category
+            or "kpi" in qid
+            or "matmul" in text
+            or "checkpoint" in text
+            or "flash" in text
+            or "memory" in text
+        ):
+            answers[qid] = transformer_kpi_answer
 
     for item in ask.get("auto_answerable", []):
         qid = item.get("id")
@@ -76,20 +97,39 @@ def _answer_prd_questions(state: dict) -> dict:
             answers[qid] = opts[0].get("label", "") if isinstance(opts[0], dict) else str(opts[0])
         _maybe_answer_freeform_kpi(item)
 
-    defaults = {
+    common_defaults = {
         "target_technology": "SkyWater Sky130, sky130_fd_sc_hd, Verilog-2005",
         "target_clock": "50 MHz",
+        "latency_budget": "No hard latency budget; prioritize lint/sim clean RTL and tractable area",
+        "power_budget": "No explicit power budget; use synchronous single-clock RTL",
+    }
+    codec_defaults = {
         "bus_protocol": "AXI-Stream data interfaces with simple sideband mode pins",
         "data_width": "8-bit grayscale pixels, signed residuals, fp16 transform coefficients, int16 levels",
         "input_data_rate": "Mort GIF frames at the requirements resolution; scalable streaming raster input",
-        "latency_budget": "No hard latency budget; prioritize lint/sim clean RTL and tractable area",
         "area_budget": "Fit a small soft-IP codec in Sky130; avoid SRAM-heavy or CPU-style designs",
-        "power_budget": "No explicit power budget; use synchronous single-clock RTL",
         "validation_kpi": rd_kpi_answer,
         "rd_validation_kpi": rd_kpi_answer,
         "quality_kpi": rd_kpi_answer,
         "psnr_bpp_kpi": rd_kpi_answer,
     }
+    transformer_defaults = {
+        "bus_protocol": "Wishbone-compatible host control plus valid/ready tensor streams",
+        "data_width": "INT4 weights, INT8 activations, INT32 accumulators, documented fixed-point tensor formats",
+        "input_data_rate": "Host-sequenced token decode with external flash weight streaming",
+        "area_budget": "Fit a Caravel-class Sky130 soft IP with <=64 KB default activation/KV SRAM and no bulk on-chip weights",
+        "validation_kpi": transformer_kpi_answer,
+        "matmul_bit_exact_kpi": "At least 64 randomized matrix tiles must match the fixed-point golden model exactly.",
+        "single_block_bit_exact_kpi": "Golden checkpoint tensors for one transformer block must match within documented fixed-point tolerance.",
+        "flash_bandwidth_model_kpi": "Bandwidth accounting must prove token-latency lower bounds from model size and flash throughput.",
+        "onchip_memory_limit_kpi": "Default generated architecture must budget no more than 64 KB activation plus KV SRAM.",
+        "no_onchip_weight_storage_kpi": "RTL must not allocate storage for more than one prefetched weight tile plus metadata.",
+    }
+    defaults = dict(common_defaults)
+    if is_transformer:
+        defaults.update(transformer_defaults)
+    elif is_codec:
+        defaults.update(codec_defaults)
     for key, value in defaults.items():
         answers.setdefault(key, value)
 
@@ -155,7 +195,7 @@ async def run(args: argparse.Namespace) -> int:
         if state.get("human_input_needed"):
             itype = state.get("interrupt_type", "")
             if itype in ("prd_questions", "ers_questions"):
-                answers = _answer_prd_questions(state)
+                answers = _answer_prd_questions(state, requirements)
                 print("[arch] auto-answering PRD questions", json.dumps(answers, indent=2), flush=True)
                 print(await mcp.resume_architecture("continue", json.dumps(answers)), flush=True)
             elif itype == "final_review":
