@@ -175,6 +175,22 @@ async def _wait_for_decision(kind: str, poll_s: float, escalation_path: Path | N
         await asyncio.sleep(max(5.0, poll_s))
 
 
+def _decision_feedback(decision: dict) -> str:
+    """Return feedback text for architecture resume decisions.
+
+    Triage agents often put their actionable text in ``rationale`` because the
+    same schema is shared with pipeline decisions.  Architecture resumes require
+    the explicit feedback parameter when action == feedback, so normalize here
+    before calling the MCP tool.
+    """
+    return str(
+        decision.get("feedback")
+        or decision.get("rationale")
+        or decision.get("root_cause")
+        or ""
+    )
+
+
 def _answer_prd_questions(state: dict, requirements: str = "") -> dict:
     answers: dict[str, str] = {}
     ask = state.get("ask_question") or {}
@@ -368,7 +384,7 @@ async def run(args: argparse.Namespace) -> int:
                 )
                 print(await mcp.resume_architecture(
                     decision.get("action", "feedback"),
-                    decision.get("feedback", ""),
+                    _decision_feedback(decision),
                 ), flush=True)
             elif itype in (
                 "architecture_review_diagram",
@@ -391,7 +407,7 @@ async def run(args: argparse.Namespace) -> int:
                 decision = await _wait_for_decision(kind, args.poll_s, path)
                 print(await mcp.resume_architecture(
                     decision.get("action", "feedback"),
-                    decision.get("feedback", ""),
+                    _decision_feedback(decision),
                 ), flush=True)
             else:
                 payload_state = {
@@ -409,7 +425,7 @@ async def run(args: argparse.Namespace) -> int:
                 decision = await _wait_for_decision(kind, args.poll_s, path)
                 print(await mcp.resume_architecture(
                     decision.get("action", "continue"),
-                    decision.get("feedback", ""),
+                    _decision_feedback(decision),
                 ), flush=True)
 
     print("[top] architecture complete; starting frontend pipeline from block_specs.json", flush=True)
