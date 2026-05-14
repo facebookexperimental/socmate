@@ -149,6 +149,7 @@ class ArchGraphState(TypedDict):
 
     # Block diagram visualization document
     block_diagram_doc: Optional[dict]
+    block_diagram_doc_validation_errors: list[str]
 
     # Human interaction
     human_response: Optional[dict]
@@ -1378,6 +1379,7 @@ async def create_documentation_node(state: ArchGraphState) -> dict:
             "phase": "documentation",
             "block_diagram_doc": doc,
             "block_diagram_doc_path": str(doc_path),
+            "block_diagram_doc_validation_errors": errors,
         }
         if ers_result:
             result["ers_spec"] = ers_result
@@ -1444,6 +1446,7 @@ async def escalate_final_review_node(state: ArchGraphState) -> dict:
 
     # Block specs path
     specs_path = state.get("block_specs_path", "")
+    block_diagram_doc_errors = state.get("block_diagram_doc_validation_errors", [])
 
     _event(state, "Final Review", "graph_node_enter", {
         "round": state["round"],
@@ -1463,11 +1466,14 @@ async def escalate_final_review_node(state: ArchGraphState) -> dict:
         "total_estimated_gates": total_gates,
         "architecture_summary": summary_text[:5000] if summary_text else "(summary not yet generated)",
         "block_specs_path": specs_path,
+        "block_diagram_doc_validation_errors": block_diagram_doc_errors,
         "constraint_rounds_used": state["round"],
         "max_rounds": state["max_rounds"],
         "supported_actions": ["accept", "feedback", "abort"],
         "instructions": (
             "Architecture is complete. Review the design summary above.\n\n"
+            "Do not approve OK2DEV while block_diagram_doc_validation_errors is non-empty; "
+            "request feedback to fix the block diagram references first.\n\n"
             "Actions:\n"
             "  - accept (OK2DEV): Approve the architecture and proceed to RTL generation.\n"
             "  - feedback (REVISE): Provide revision notes; architecture will re-iterate "
