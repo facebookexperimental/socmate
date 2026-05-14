@@ -20,6 +20,7 @@ Each violation dict has:
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from pathlib import Path
@@ -210,6 +211,29 @@ def _check_shuttle_constraints(
     return violations
 
 
+def _shuttle_constraints_enabled(requirements: str = "", ers_spec: dict | None = None) -> bool:
+    """Return whether package/shuttle constraints should be enforced.
+
+    Most SocMate frontend runs generate reusable soft IP, where block ports are
+    internal module interfaces rather than package GPIO. Shuttle pad/area checks
+    are useful for MPW benchmark wrappers, but they must be opt-in to avoid
+    forcing every soft IP through an OpenFrame pin budget.
+    """
+    value = os.environ.get("SOCMATE_ENABLE_SHUTTLE_CONSTRAINTS", "").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+
+    text = requirements.lower()
+    if any(token in text for token in ("openframe wrapper", "mpw wrapper", "shuttle gpio")):
+        return True
+
+    ers = (ers_spec.get("prd", ers_spec.get("ers", {})) if isinstance(ers_spec, dict) else {}) or {}
+    target = json.dumps(ers.get("technology", {})).lower()
+    return any(token in target for token in ("openframe", "caravel", "mpw"))
+
+
 async def check_constraints(
     block_diagram: dict,
     memory_map: dict,
@@ -245,8 +269,13 @@ async def check_constraints(
     tracer = _trace.get_tracer("socmate.architecture.constraints")
 
     with tracer.start_as_current_span("check_constraints") as span:
-        # --- Deterministic shuttle checks (always run, no LLM needed) ---
-        shuttle_violations = _check_shuttle_constraints(block_diagram, ers_spec)
+        # --- Deterministic shuttle checks (opt-in for package/top-level runs) ---
+        shuttle_enabled = _shuttle_constraints_enabled(requirements, ers_spec)
+        shuttle_violations = (
+            _check_shuttle_constraints(block_diagram, ers_spec)
+            if shuttle_enabled
+            else []
+        )
 
         # --- Extract PRD-driven limits ---
         ers = (ers_spec.get("prd", ers_spec.get("ers", {})) if isinstance(ers_spec, dict) else {}) or {}
@@ -273,22 +302,31 @@ async def check_constraints(
         else:
             gate_budget_rationale = "default budget (no ERS die area specified)"
 
-        # --- Build shuttle rules for LLM ---
         shuttle = _get_shuttle_limits()
         total_pads, _ = _count_block_io_pads(block_diagram)
-        shuttle_rules = (
-            "SHUTTLE CONSTRAINT RULES:\n\n"
-            f"11. GPIO PAD BUDGET: This design targets the {shuttle['target'].upper()} "
-            f"shuttle with {shuttle['usable_io_pads']} usable I/O pads "
-            f"(GPIO[0]=clk, GPIO[1]=rst reserved). Currently {total_pads} pads needed. "
-            f"If any block's interface widths would cause GPIO overflow, flag as "
-            f"\"structural\" severity \"error\".\n\n"
-            f"12. SHUTTLE AREA FIT: The {shuttle['target'].upper()} shuttle user area is "
-            f"{shuttle['user_area_mm2']:.3f} mm² ({shuttle['user_width_um']:.0f} x "
-            f"{shuttle['user_height_um']:.0f} um). Sum of block estimated_gates / 200000 "
-            f"must be < user_area * 0.8 for routing margin. Flag as \"structural\" "
-            f"severity \"error\" if exceeded.\n"
-        )
+        if shuttle_enabled:
+            shuttle_rules = (
+                "SHUTTLE CONSTRAINT RULES:\n\n"
+                f"11. GPIO PAD BUDGET: This design targets the {shuttle['target'].upper()} "
+                f"shuttle with {shuttle['usable_io_pads']} usable I/O pads "
+                f"(GPIO[0]=clk, GPIO[1]=rst reserved). Currently {total_pads} pads needed. "
+                f"If any block's interface widths would cause GPIO overflow, flag as "
+                f"\"structural\" severity \"error\".\n\n"
+                f"12. SHUTTLE AREA FIT: The {shuttle['target'].upper()} shuttle user area is "
+                f"{shuttle['user_area_mm2']:.3f} mm² ({shuttle['user_width_um']:.0f} x "
+                f"{shuttle['user_height_um']:.0f} um). Sum of block estimated_gates / 200000 "
+                f"must be < user_area * 0.8 for routing margin. Flag as \"structural\" "
+                f"severity \"error\" if exceeded.\n"
+            )
+        else:
+            shuttle_rules = (
+                "SHUTTLE CONSTRAINT RULES:\n"
+                "11-12. Skipped for this run. The architecture target is reusable "
+                "soft IP, so block interfaces are internal RTL ports rather than "
+                "package GPIO. Enforce shuttle GPIO/area only when "
+                "SOCMATE_ENABLE_SHUTTLE_CONSTRAINTS=1 or the requirements "
+                "explicitly target an MPW/OpenFrame/Caravel wrapper.\n"
+            )
 
         # --- Build bus rules (skip for simple designs) ---
         needs_bus = (
@@ -432,6 +470,7 @@ async def check_constraints(
             span.set_attribute("max_gate_count", max_gate_count)
             span.set_attribute("sram_size_kb", sram_size_kb)
             span.set_attribute("needs_bus", needs_bus)
+            span.set_attribute("shuttle_constraints_enabled", shuttle_enabled)
             if violations:
                 span.set_attribute(
                     "violations",
