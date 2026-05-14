@@ -523,6 +523,23 @@ class TestRouteAfterIntegrationReview:
         assert result["integration_review_action"] == "approve"
 
 
+class TestRouteAfterIntegration:
+    def test_clean_integration_goes_to_dv(self):
+        assert pipeline_graph.route_after_integration({
+            "integration_result": {"lint_clean": True, "error_count": 0}
+        }) == "integration_dv"
+
+    def test_lint_failure_ends(self):
+        assert pipeline_graph.route_after_integration({
+            "integration_result": {"lint_clean": False, "error_count": 0}
+        }) == "__end__"
+
+    def test_error_count_ends(self):
+        assert pipeline_graph.route_after_integration({
+            "integration_result": {"lint_clean": True, "error_count": 1}
+        }) == "__end__"
+
+
 # ---------------------------------------------------------------------------
 # Internal nodes (unit tests)
 # ---------------------------------------------------------------------------

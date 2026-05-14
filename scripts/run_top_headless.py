@@ -210,6 +210,24 @@ def _decision_feedback(decision: dict) -> str:
     )
 
 
+def _frontend_integration_blocker(state: dict) -> str:
+    """Return a reason if frontend integration is not backend-ready."""
+    result = state.get("integration_result") or {}
+    if not result:
+        return ""
+    if result.get("aborted"):
+        return "integration check was aborted"
+    if result.get("lint_clean") is False:
+        return "integration top lint is not clean"
+    try:
+        error_count = int(result.get("error_count", 0) or 0)
+    except (TypeError, ValueError):
+        error_count = 0
+    if error_count > 0:
+        return f"integration check still reports {error_count} error(s)"
+    return ""
+
+
 def _answer_prd_questions(state: dict, requirements: str = "") -> dict:
     answers: dict[str, str] = {}
     ask = state.get("ask_question") or {}
@@ -525,11 +543,22 @@ async def run(args: argparse.Namespace) -> int:
         if state.get("pipeline_done") and not next_nodes:
             print("[top] pipeline finished", flush=True)
             print(json.dumps(state, indent=2), flush=True)
+            blocker = _frontend_integration_blocker(state)
+            if blocker:
+                print(f"[top] frontend integration is not backend-ready: {blocker}", flush=True)
+                return 1
             break
         if state.get("status") == "done" and not next_nodes:
             if state.get("completed_count") == state.get("total_blocks"):
                 print("[top] pipeline finished", flush=True)
                 print(json.dumps(state, indent=2), flush=True)
+                blocker = _frontend_integration_blocker(state)
+                if blocker:
+                    print(
+                        f"[top] frontend integration is not backend-ready: {blocker}",
+                        flush=True,
+                    )
+                    return 1
                 break
             print("[top] pipeline stopped before all blocks completed", flush=True)
             print(json.dumps(state, indent=2), flush=True)

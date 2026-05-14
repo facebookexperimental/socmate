@@ -926,6 +926,10 @@ def run_integration_simulation(
     """
     import os
     import shutil
+    from orchestrator.langgraph.pipeline_helpers import (
+        _normalize_cocotb_timing_keywords,
+        _parse_cocotb_summary,
+    )
 
     sim_dir = PROJECT_ROOT / "sim_build" / "integration"
     sim_dir.mkdir(parents=True, exist_ok=True)
@@ -950,7 +954,9 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
 """
     (sim_dir / "Makefile").write_text(makefile_content)
 
-    shutil.copy2(tb_path, sim_dir / f"test_{design_name}.py")
+    sim_tb_path = sim_dir / f"test_{design_name}.py"
+    shutil.copy2(tb_path, sim_tb_path)
+    _normalize_cocotb_timing_keywords(sim_tb_path)
 
     env = os.environ.copy()
     import sys
@@ -973,12 +979,19 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
             "integration", "integration_sim", [make_bin, "-C", str(sim_dir)],
             result, attempt,
         )
-        output = (result.stdout + "\n" + result.stderr)[-5000:]
+        full_output = result.stdout + "\n" + result.stderr
+        output = full_output[-5000:]
         no_tests = "No tests were discovered" in output
+        summary = _parse_cocotb_summary(full_output)
         if no_tests:
             output = (
                 "COCOTB ERROR: No tests were discovered. Treating simulation "
                 "as failed to prevent DV false pass.\n" + output
+            )
+        if summary["found"] and summary["tests_failed"]:
+            output = (
+                "COCOTB ERROR: Regression summary reports failing tests. "
+                "Treating simulation as failed even if make returned 0.\n" + output
             )
 
         vcd_path = sim_dir / "dump.vcd"
@@ -987,6 +1000,10 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
         passed = (
             result.returncode == 0
             and not no_tests
+            and (
+                not summary["found"]
+                or (summary["tests_total"] > 0 and summary["tests_failed"] == 0)
+            )
             and wavekit_audit.get("ok") is True
         )
         if not wavekit_audit.get("ok"):
@@ -998,6 +1015,9 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
             "passed": passed,
             "log": output,
             "returncode": result.returncode,
+            "tests_passed": summary["tests_passed"],
+            "tests_total": summary["tests_total"],
+            "tests_failed": summary["tests_failed"],
             "log_path": log_path,
             "vcd_path": str(vcd_path) if vcd_path.exists() else "",
             "wavekit_audit_path": str(audit_path),

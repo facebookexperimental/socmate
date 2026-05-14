@@ -2411,6 +2411,10 @@ def route_after_integration(state: OrchestratorState) -> str:
         return END
     if result.get("skipped") or result.get("skipped_by_user"):
         return END
+    if result.get("lint_clean") is False:
+        return END
+    if int(result.get("error_count", 0) or 0) > 0:
+        return END
     return "integration_dv"
 
 
