@@ -1,0 +1,26 @@
+# 32-bit adder smoke design for validating the full frontend + backend flow.
+#
+# This is intentionally tiny but wide enough to exercise non-trivial carry
+# propagation through RTL generation, simulation, synthesis, OpenROAD PnR,
+# Magic DRC, and netgen LVS.
+
+blocks:
+  adder32:
+    tier: 1
+    rtl_target: "rtl/adder32/adder32.v"
+    testbench: "tb/cocotb/test_adder32.py"
+    description: |
+      32-bit unsigned ripple-carry adder. Combinational, no clock or reset.
+
+      Interface:
+        input  [31:0] a
+        input  [31:0] b
+        input         cin
+        output [31:0] sum
+        output        cout
+
+      Behaviour: {cout, sum} = a + b + cin.
+
+      Constraints: Verilog-2005, no latches, no async resets, no tri-states.
+      Target Sky130 sky130_fd_sc_hd at 50 MHz. This block is a full-flow smoke
+      test, not a production arithmetic macro.
