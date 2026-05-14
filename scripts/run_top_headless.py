@@ -282,6 +282,15 @@ def _answer_prd_questions(state: dict, requirements: str = "") -> dict:
         "psnr_bpp_kpi": rd_kpi_answer,
     }
     transformer_defaults = {
+        "primary_model_shape": "llama2.c TinyStories 260K-class: d_model=64, n_layers=5, n_heads=4, n_kv_heads=4, vocab_size=32000, max_seq_len=64, hidden_dim=172",
+        "flagship_model_shape": "llama2.c TinyStories 260K-class: d_model=64, n_layers=5, n_heads=4, n_kv_heads=4, vocab_size=32000, max_seq_len=64, hidden_dim=172",
+        "exact_model_manifest": "Use a fixed synthetic 260K-class llama2.c manifest with d_model=64, n_layers=5, n_heads=4, n_kv_heads=4, hidden_dim=172, vocab_size=32000, max_seq_len=64; validation vectors may be generated from this manifest.",
+        "fixed_point_formats": "INT4 weights are signed symmetric Q0.3, INT8 activations are signed Q3.4, RMSNorm/RoPE/SiLU LUT outputs are Q1.15, softmax probabilities are Q0.15, accumulators are INT32 with documented right-shift requantization.",
+        "qspi_timing_parameters": "QSPI SDR at 50 MHz, 4 data lines, 8-bit command, 24-bit address, 8 dummy cycles, 256-byte bursts; use 15 MB/s sustained effective bandwidth for KPI accounting.",
+        "flash_clock_and_protocol": "QSPI SDR at 50 MHz with 8-bit command, 24-bit address, 8 dummy cycles, 256-byte bursts, valid/ready backpressure, and underrun counters.",
+        "end_to_end_decode_kpi": "Decode exactly 8 tokens from a fixed prompt and fixed synthetic model; every emitted token ID must match the golden reference.",
+        "decoded_token_count_kpi": "8 tokens",
+        "end_to_end_token_count": "8 tokens",
         "bus_protocol": "Wishbone-compatible host control plus valid/ready tensor streams",
         "data_width": "INT4 weights, INT8 activations, INT32 accumulators, documented fixed-point tensor formats",
         "input_data_rate": "Host-sequenced token decode with external flash weight streaming",
