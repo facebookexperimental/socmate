@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -26,6 +27,39 @@ def _json_loads(text: str) -> dict:
     except json.JSONDecodeError:
         return {"error": text}
     return value if isinstance(value, dict) else {"value": value}
+
+
+def _write_question_escalation(kind: str, state: dict) -> Path:
+    esc_dir = PROJECT_ROOT / ".socmate" / "escalations"
+    esc_dir.mkdir(parents=True, exist_ok=True)
+    path = esc_dir / f"{kind}.json"
+    answers_path = esc_dir / f"{kind}.answers.json"
+    payload = {
+        "type": kind,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "phase": state.get("phase"),
+        "interrupt_type": state.get("interrupt_type"),
+        "summary": state.get("interrupt_summary"),
+        "ask_question": state.get("ask_question") or {},
+        "answer_file": str(answers_path),
+        "resume_action": "continue",
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    return path
+
+
+async def _wait_for_question_answers(kind: str, poll_s: float) -> dict:
+    esc_dir = PROJECT_ROOT / ".socmate" / "escalations"
+    answers_path = esc_dir / f"{kind}.answers.json"
+    print(f"[arch] escalation pending: write answers JSON to {answers_path}", flush=True)
+    while True:
+        if answers_path.exists():
+            answers = json.loads(answers_path.read_text())
+            if isinstance(answers, dict):
+                print(f"[arch] loaded escalation answers from {answers_path}", flush=True)
+                return answers
+            raise RuntimeError(f"Escalation answers at {answers_path} must be a JSON object")
+        await asyncio.sleep(max(5.0, poll_s))
 
 
 def _answer_prd_questions(state: dict, requirements: str = "") -> dict:
@@ -195,8 +229,13 @@ async def run(args: argparse.Namespace) -> int:
         if state.get("human_input_needed"):
             itype = state.get("interrupt_type", "")
             if itype in ("prd_questions", "ers_questions"):
-                answers = _answer_prd_questions(state, requirements)
-                print("[arch] auto-answering PRD questions", json.dumps(answers, indent=2), flush=True)
+                if args.auto_answer_questions:
+                    answers = _answer_prd_questions(state, requirements)
+                    print("[arch] auto-answering PRD questions", json.dumps(answers, indent=2), flush=True)
+                else:
+                    path = _write_question_escalation(itype, state)
+                    print(f"[arch] wrote question escalation to {path}", flush=True)
+                    answers = await _wait_for_question_answers(itype, args.poll_s)
                 print(await mcp.resume_architecture("continue", json.dumps(answers)), flush=True)
             elif itype == "final_review":
                 print("[arch] auto-approving final review", flush=True)
@@ -299,6 +338,13 @@ def main() -> None:
     parser.add_argument("--max-rounds", type=int, default=3)
     parser.add_argument("--max-attempts", type=int, default=5)
     parser.add_argument("--poll-s", type=float, default=30.0)
+    parser.add_argument(
+        "--auto-answer-questions",
+        action="store_true",
+        default=os.environ.get("SOCMATE_HEADLESS_AUTO_ANSWER_QUESTIONS", "").strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Use canned PRD/ERS answers. Default is to escalate questions and wait for an answers file.",
+    )
     args = parser.parse_args()
     raise SystemExit(asyncio.run(run(args)))
 
