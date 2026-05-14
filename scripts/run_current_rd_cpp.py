@@ -21,7 +21,7 @@ DEFAULT_GIF = Path(
 )
 WIDTH = 640
 HEIGHT = 360
-FRAMES = 10
+FRAMES = int(os.environ.get("SOCMATE_RD_FRAMES", "10"))
 
 
 def make_raw(gif: Path, out_raw: Path) -> Path:
@@ -63,6 +63,7 @@ def build(out_dir: Path) -> Path:
     build_jobs = int(os.environ.get("SOCMATE_RD_BUILD_JOBS", str(os.cpu_count() or 1)))
     sources = [
         ROOT / "rtl" / "integration" / "chip_top.v",
+        ROOT / "rtl" / "integration" / "multiframe_codec_v2_top.v",
         *sorted((ROOT / "rtl" / "multiframe_codec_v2").glob("*.v")),
     ]
     cmd = [
