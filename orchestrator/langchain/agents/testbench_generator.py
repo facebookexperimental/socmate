@@ -101,6 +101,9 @@ class TestbenchGeneratorAgent:
                 f"to generate expected outputs for comparison against the RTL DUT\n"
                 f"6. CRITICAL: Use the EXACT signal names from the Verilog module ports\n"
                 f"7. Use RisingEdge(dut.clk) for all output sampling (never Timer(0))\n"
+                f"8. The pipeline will dump sim_build/{block_name}/dump.vcd "
+                f"and audit it with WaveKit; exercise reset, handshakes, "
+                f"datapath, metadata, and outputs with meaningful transitions\n"
             )
 
             run_name = f"Generate Testbench [{block_title}]"

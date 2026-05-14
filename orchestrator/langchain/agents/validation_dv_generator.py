@@ -94,6 +94,15 @@ class ValidationDVGenerator:
                 for block_name, rtl_path in sorted(block_rtl_paths.items()):
                     parts.append(f"  {block_name}: {rtl_path}")
 
+            parts.append(
+                "\n--- VCD / WAVEKIT REQUIREMENT ---\n"
+                "The pipeline will dump sim_build/integration/dump.vcd and "
+                "audit it with WaveKit. For every RTL/application ERS "
+                "requirement, drive stimulus that leaves observable waveform "
+                "evidence for reset, handshakes, control/mode selection, "
+                "payload movement, KPI counters, and final outputs."
+            )
+
             content = await self.llm.call(
                 system=SYSTEM_PROMPT,
                 prompt="\n".join(parts),

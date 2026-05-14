@@ -186,6 +186,9 @@ class RTLGeneratorAgent:
                 "",
                 "## Output",
                 f"Write the complete synthesizable {_lang} module to: {rtl_target}",
+                "Keep reset, handshakes, state, sideband metadata, error flags, "
+                "and pipeline boundary signals named and observable so the "
+                "downstream Verilator VCD can be audited with WaveKit.",
                 "",
             ])
 

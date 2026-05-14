@@ -61,6 +61,20 @@ RULES:
     assign statement. Never split updates to the same signal across multiple
     always blocks or mix combinational assign with sequential always blocks
     for the same signal.
+16. WAVEKIT/VCD AUDITABILITY -- MANDATORY:
+    The downstream DV nodes dump a Verilator VCD and inspect it with WaveKit.
+    Your RTL must be waveform-auditable:
+    a. Preserve explicit, named valid/ready, state, counter, coordinate,
+       metadata, error, and packet-boundary signals instead of hiding all
+       protocol state inside anonymous packed expressions.
+    b. Register sideband metadata at pipeline boundaries with stable names
+       ending in `_q` where possible, so WaveKit can correlate data and
+       metadata across cycles.
+    c. Never drop, repack, or reinterpret tuser/metadata bits without a
+       named assignment documenting the bit layout in code comments.
+    d. If you add an error/illegal flag, keep the original predicate signals
+       observable as named wires or regs so a waveform audit can identify
+       the first failing condition.
 
 PROCESS-SPECIFIC CONSTRAINTS:
 {process_constraints}
@@ -114,7 +128,9 @@ Only report success when lint is clean.
 Output format:
 1. Write the complete {rtl_language} module to the specified file path.
 2. Run verilator lint and fix any errors.
-3. After the module, output a JSON block with port information:
+3. Ensure the RTL exposes enough named internal signals for a WaveKit VCD
+   audit of reset, handshakes, metadata, state transitions, and error flags.
+4. After the module, output a JSON block with port information:
    ```json
    {{"module_name": "...", "ports": {{"clk": "input", ...}}}}
    ```

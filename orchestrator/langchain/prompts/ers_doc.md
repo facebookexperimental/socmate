@@ -76,6 +76,17 @@ Produce a JSON object with the following structure:
     "functional_requirements": [
       "<derived from FRD with engineering detail>"
     ],
+    "system_invariants": [
+      {{
+        "id": "INV-001",
+        "description": "<cross-block semantic invariant required for correctness>",
+        "affected_blocks": ["<block_a>", "<block_b>"],
+        "required_state": ["<metadata/state/payload that must be preserved>"],
+        "golden_reference": "<golden model function, trace point, or expected vector>",
+        "tolerance": "<exact equality or numeric bound>",
+        "validation_method": "<how integration/validation DV must verify it>"
+      }}
+    ],
     "per_block_requirements": [
       {{
         "block_name": "<name>",
@@ -116,6 +127,9 @@ GUIDELINES:
   depth that the upstream documents don't have
 - Every functional requirement from the FRD should map to specific
   per-block engineering requirements
+- Preserve every system-level semantic invariant from the SAD, FRD, block
+  diagram, and golden model in `system_invariants`. These are cross-block
+  correctness contracts, not optional documentation.
 - Every human-provided measurable application KPI from the PRD/FRD must be
   preserved as an ERS requirement in `validation_dv_requirements`. Do not drop
   or dilute user intent. If no measurable KPI was provided, record an open item
@@ -124,6 +138,15 @@ GUIDELINES:
 - `validation_dv_requirements` must be written so a DV agent can run RTL
   simulation and decide pass/fail using measured data. Include metric,
   threshold/range, stimulus, reference/golden model, and coverage mapping.
+- For every `system_invariants` entry that can be observed in RTL simulation,
+  add a corresponding `validation_dv_requirements` item. The test method must
+  name the transaction/state to compare, the reference model trace point, and
+  the allowed tolerance.
+- For stateful feedback algorithms, add invariants for context/predictor
+  synchronization. Examples include encoder feedback reconstruction matching
+  decoder/golden reconstruction per macroblock, entropy/adaptive state matching
+  the emitted bitstream, packet order preservation, and atomic advancement of
+  mode/metadata/payload state.
 - Include interface protocols (AXI-Stream, dedicated pins, etc.)
   for each block based on the block diagram connections
 - Reset convention, clock domain assignments from the clock tree

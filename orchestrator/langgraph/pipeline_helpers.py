@@ -23,9 +23,11 @@ Provides:
 from __future__ import annotations
 
 from orchestrator._timeouts import scaled
+import json
 import os
 import shutil
 import subprocess
+import sys
 import time as _time
 from pathlib import Path
 
@@ -472,6 +474,134 @@ async def generate_testbench(
 # Simulation
 # ---------------------------------------------------------------------------
 
+def run_wavekit_vcd_audit(vcd_path: Path, audit_path: Path, clock_hint: str = "clk") -> dict:
+    """Inspect a Verilator VCD with WaveKit and persist a small audit report."""
+    if not vcd_path.exists() or vcd_path.stat().st_size == 0:
+        result = {
+            "ok": False,
+            "error": f"missing or empty VCD: {vcd_path}",
+            "vcd_path": str(vcd_path),
+        }
+        audit_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        return result
+
+    def has_wavekit(python: str) -> bool:
+        check = subprocess.run(
+            [python, "-c", "import wavekit"],
+            capture_output=True,
+            text=True,
+            timeout=scaled(30),
+        )
+        return check.returncode == 0
+
+    def wavekit_python() -> str:
+        if has_wavekit(sys.executable):
+            return sys.executable
+
+        venv_dir = PROJECT_ROOT / ".socmate" / "tools" / "wavekit-venv"
+        python = venv_dir / "bin" / "python"
+        if not python.exists():
+            subprocess.run(
+                [sys.executable, "-m", "venv", str(venv_dir)],
+                capture_output=True,
+                text=True,
+                timeout=scaled(120),
+                check=True,
+            )
+        if not has_wavekit(str(python)):
+            subprocess.run(
+                [str(python), "-m", "pip", "install", "-q", "wavekit>=0.5.6"],
+                capture_output=True,
+                text=True,
+                timeout=scaled(300),
+                check=True,
+            )
+        return str(python)
+
+    script = r"""
+import json
+import sys
+from pathlib import Path
+
+from wavekit import VcdReader
+
+vcd_path = Path(sys.argv[1])
+clock_hint = sys.argv[2]
+
+with VcdReader(str(vcd_path)) as reader:
+    top_scopes = reader.top_scope_list()
+    signals = []
+    clocks = []
+
+    def walk(scope):
+        for sig in getattr(scope, "signal_list", []):
+            name = sig.full_name
+            signals.append({"name": name, "width": int(sig.width)})
+            base = name.split(".")[-1].split("[")[0]
+            if base in {clock_hint, "clk", "clock", "i_clk"}:
+                clocks.append(name)
+        for child in getattr(scope, "child_scope_list", []):
+            walk(child)
+
+    for top in top_scopes:
+        walk(top)
+
+    if not signals:
+        raise RuntimeError("VCD contains no signals")
+    if int(reader.end_time) <= int(reader.begin_time):
+        raise RuntimeError(
+            f"VCD contains no value-change time range: begin={reader.begin_time} end={reader.end_time}"
+        )
+
+    report = {
+        "ok": True,
+        "vcd_path": str(vcd_path),
+        "begin_time": int(reader.begin_time),
+        "end_time": int(reader.end_time),
+        "signal_count": len(signals),
+        "sample_signals": signals[:64],
+        "clock_candidates": clocks[:16],
+    }
+    print(json.dumps(report))
+"""
+    try:
+        audit_python = wavekit_python()
+        proc = subprocess.run(
+            [audit_python, "-c", script, str(vcd_path), clock_hint],
+            capture_output=True,
+            text=True,
+            timeout=scaled(180),
+        )
+    except subprocess.CalledProcessError as exc:
+        result = {
+            "ok": False,
+            "error": (
+                f"WaveKit setup failed: {(exc.stderr or exc.stdout or str(exc))[-2000:]}"
+            ),
+            "vcd_path": str(vcd_path),
+        }
+        audit_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        return result
+    except subprocess.TimeoutExpired:
+        result = {
+            "ok": False,
+            "error": "WaveKit VCD audit timed out",
+            "vcd_path": str(vcd_path),
+        }
+        audit_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        return result
+
+    if proc.returncode != 0:
+        result = {
+            "ok": False,
+            "error": (proc.stderr or proc.stdout)[-2000:],
+            "vcd_path": str(vcd_path),
+        }
+    else:
+        result = json.loads(proc.stdout)
+    audit_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return result
+
 def run_simulation(block: dict, rtl_path: str, tb_path: str, attempt: int = 1) -> dict:
     """Run cocotb simulation with Verilator."""
     block_name = block["name"]
@@ -484,7 +614,8 @@ TOPLEVEL_LANG = verilog
 VERILOG_SOURCES = {rtl_path}
 TOPLEVEL = {block_name}
 COCOTB_TEST_MODULES = test_{block_name}
-EXTRA_ARGS += --trace
+WAVES = 1
+EXTRA_ARGS += --trace --trace-structs
 include $(shell cocotb-config --makefiles)/Makefile.sim
 """
     (sim_dir / "Makefile").write_text(makefile_content)
@@ -516,15 +647,23 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
         )
         log_path = _write_step_log(block_name, "simulate", [make_bin, "-C", str(sim_dir)], result, attempt)
         output = (result.stdout + "\n" + result.stderr)[-5000:]
-        passed = result.returncode == 0
-
         vcd_path = sim_dir / "dump.vcd"
+        audit_path = sim_dir / "wavekit_audit.json"
+        wavekit_audit = run_wavekit_vcd_audit(vcd_path, audit_path)
+        passed = result.returncode == 0 and wavekit_audit.get("ok") is True
+        if not wavekit_audit.get("ok"):
+            output = (
+                "WAVEKIT VCD AUDIT FAILED: "
+                f"{wavekit_audit.get('error', 'unknown error')}\n" + output
+            )
         return {
             "passed": passed,
             "log": output,
             "returncode": result.returncode,
             "log_path": log_path,
             "vcd_path": str(vcd_path) if vcd_path.exists() else "",
+            "wavekit_audit_path": str(audit_path),
+            "wavekit_audit": wavekit_audit,
         }
     except subprocess.TimeoutExpired:
         cmd = [make_bin, "-C", str(sim_dir)]
@@ -837,7 +976,9 @@ async def fix_testbench_errors(
         "- Wrong timing assumptions (check pipeline latency in uArch spec)\n"
         "- Golden model mismatches (check algorithm implementation)\n"
         "- Type errors (cast numpy types to int before DUT assignment)\n"
-        "- Cocotb API issues (use unit= not units=, start_soon not start_fork)\n\n"
+        "- Cocotb API issues (use unit= not units=, start_soon not start_fork)\n"
+        "- Missing, empty, or header-only dump.vcd / failed WaveKit audit "
+        "(tests must advance time and exercise real DUT activity)\n\n"
         "Make targeted fixes. Do NOT rewrite the entire testbench unless "
         "the structure is fundamentally broken."
     )
@@ -848,6 +989,8 @@ async def fix_testbench_errors(
         f"- Testbench (fix this): {tb_path}\n"
         f"- RTL Verilog: {rtl_path}\n"
         f"- Simulation log: {sim_log_path}\n"
+        f"- VCD waveform: sim_build/{block_name}/dump.vcd\n"
+        f"- WaveKit audit: sim_build/{block_name}/wavekit_audit.json\n"
         f"- uArch Spec: arch/uarch_specs/{block_name}.md\n"
         f"- Constraints: .socmate/blocks/{block_name}/constraints.json\n"
         f"- DV Rules: arch/DV_RULES.md\n\n"

@@ -28,6 +28,10 @@ VALIDATION STRATEGY:
    frame/sample count, packet ordering, mode selection, reset behavior.
 5. Compare every measured KPI against the ERS acceptance criterion.
 6. Log a concise requirement coverage line for every ERS requirement checked.
+7. Verify every ERS `system_invariants` / semantic invariant that is observable
+   in RTL simulation. Do not only check final output. For stateful feedback
+   loops, compare the internal transaction/context trace against the golden
+   model at the first meaningful boundary.
 
 If an ERS requirement is purely backend/physical (for example DRC, LVS, metal
 density, GDS existence), include it in a REQUIREMENT_COVERAGE dictionary with
@@ -55,6 +59,26 @@ REQUIREMENT COVERAGE RULES:
 - Every generated test should log the requirement IDs it covers.
 - Add one final cocotb test that asserts no RTL/application requirement remains
   unverified.
+
+VCD/WAVEKIT AUDIT -- MANDATORY:
+- The validation DV node runs Verilator with tracing enabled, expects
+  `sim_build/integration/dump.vcd`, and audits it with WaveKit before the
+  node can pass.
+- For each RTL/application ERS requirement, drive enough realistic stimulus
+  that the relevant requirement evidence is visible in the VCD: reset,
+  handshakes, mode/control selection, payload movement, KPI counters, and
+  final outputs as applicable.
+- For each semantic invariant, make the relevant state visible in the VCD or
+  logs: selected mode, selected candidate/group, sideband metadata, predictor
+  context, reconstructed feedback, entropy/adaptive state, packet/frame index,
+  and context update handshakes as applicable.
+- If a final KPI fails, the testbench should log enough per-transaction context
+  to identify the first divergence against the golden reference. For codecs,
+  this means logging frame/block index, selected mode, emitted coefficients or
+  symbols, reconstructed block quality, and feedback/context update evidence
+  when those signals are available.
+- Log the ERS requirement IDs next to the transactions that exercise them so
+  WaveKit waveform inspection can tie each requirement to observed signals.
 
 OUTPUT FORMAT GUARD:
 Your response MUST be a single, complete Python file containing valid cocotb

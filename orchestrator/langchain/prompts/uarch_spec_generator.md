@@ -83,6 +83,43 @@ information, use it to align your interface spec. Mismatched interfaces
 are the #1 cause of integration failures.
 
 ═══════════════════════════════════════════════════════════════════════
+SEMANTIC CONTRACTS AND STATEFUL FEEDBACK
+═══════════════════════════════════════════════════════════════════════
+
+The block's port list is not enough. You MUST also preserve semantic
+contracts from the block diagram, ERS, and neighboring blocks.
+
+For this block, identify and document:
+1. **Payload semantics**: exact field layout, numeric format, mode encoding,
+   sideband meaning, packet ordering, and when each field is valid.
+2. **Atomicity rules**: which payload fields and sideband metadata must refer
+   to the same transaction, sample, macroblock, packet, frame, or state update.
+3. **Stateful feedback loops**: any predictor, context RAM, recurrence,
+   reconstruction feedback, adaptive coding state, rolling checksum, history
+   buffer, or neighbor table that is updated from this block or consumed by it.
+4. **Golden equivalence obligation**: the internal state or output that must
+   equal, or remain within a specified bound of, the golden model. State the
+   comparison point and tolerance.
+5. **Cross-block failure mode**: what downstream block will fail if this block
+   drops metadata, changes mode alignment, changes ordering, or updates state
+   using a value different from the golden/decoder value.
+
+For codecs and predictors, explicitly specify the closed-loop invariant. For
+example:
+
+> The reconstructed pixels emitted for neighbor/context update after each
+> macroblock MUST be generated from the same selected mode, selected quantized
+> coefficients, predictor samples, inverse transform, dequantization, clipping,
+> and deblock rules that the decoder/golden model applies to the emitted
+> bitstream. The context update for macroblock N MUST occur before any
+> dependent macroblock N+1 consumes that context, and mode/coefficient/context
+> metadata must advance atomically.
+
+If the block cannot satisfy a required semantic contract with the interfaces
+provided by the block diagram, do not invent local state to guess it. Record an
+open uArch issue and state the required interface change.
+
+═══════════════════════════════════════════════════════════════════════
 ARITHMETIC CORRECTNESS
 ═══════════════════════════════════════════════════════════════════════
 
@@ -165,6 +202,24 @@ or from functional description to hardware:
 If no Python golden model is provided, map from the functional
 description in the ERS/block diagram instead.
 
+### 4a. Cross-Block Semantic Invariants (MANDATORY)
+
+List every semantic invariant from the block diagram/ERS that this block
+must preserve. For each invariant provide:
+- **Invariant ID**: stable name, e.g. `INV-RECON-FEEDBACK-001`
+- **Applies to ports/state**: exact ports, registers, memories, and sideband
+  fields involved
+- **Golden reference point**: function, trace point, or expected transaction
+  in the golden model
+- **Tolerance**: exact equality or numeric bound
+- **Update/consume timing**: cycle or handshake when state is sampled/updated
+- **Downstream dependency**: connected block(s) relying on this invariant
+- **Validation hook**: what signal or VCD-visible state validation/integration
+  DV should inspect
+
+If there are no cross-block semantic invariants, explicitly state why this is
+safe. Do not leave this section empty.
+
 ## 5. Reset and Initialization
 - Every register/memory element with its reset value
 - Reset polarity and type (must match ERS)
@@ -225,6 +280,8 @@ Rules:
 - Known pitfalls from the Python model (if provided)
 - Synthesis considerations for Sky130
 - Suggestions for testbench verification points
+- Contract-audit notes: signals that must be dumped in VCD to prove semantic
+  invariants, especially feedback/context state and selected-mode metadata
 
 ## 9. Verilog Interface Stub
 
@@ -270,7 +327,17 @@ After the document, output a JSON summary block:
   "output_timing": {{
     "<output_port_name>": {{"type": "registered", "latency_cycles": 2}},
     "<another_output>": {{"type": "combinational", "latency_cycles": 0}}
-  }}
+  }},
+  "semantic_invariants": [
+    {{
+      "id": "INV-001",
+      "description": "<cross-block invariant>",
+      "ports_or_state": ["<port_or_reg>"],
+      "golden_reference": "<model function or trace point>",
+      "tolerance": "<exact or numeric bound>",
+      "validation_hook": "<VCD-visible signal/check>"
+    }}
+  ]
 }}
 ```
 
@@ -312,3 +379,9 @@ RULES
 10. **Do not over-engineer.** A simple combinational adder with a
     registered output does not need an FSM, AXI-Stream, or
     backpressure logic. Match complexity to requirements.
+
+11. **Do not drop semantic state.** If the algorithm relies on predictor
+    context, selected mode, reconstruction feedback, entropy/adaptive state,
+    or other closed-loop state, the uArch MUST either carry that state through
+    the relevant interfaces or explicitly require a block repartition. Guessing
+    or recomputing from incomplete metadata is not acceptable.

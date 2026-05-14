@@ -25,6 +25,7 @@ from orchestrator.langgraph.pipeline_helpers import (
     PROJECT_ROOT,
     _write_step_log,
     _write_step_log_error,
+    run_wavekit_vcd_audit,
 )
 
 
@@ -942,8 +943,9 @@ SIM = verilator
 TOPLEVEL_LANG = verilog
 VERILOG_SOURCES = {sources_str}
 TOPLEVEL = {safe_name}
-COCOTB_TEST_MODULES = test_{design_name}
-EXTRA_ARGS += --trace
+MODULE = {Path(tb_path).stem}
+WAVES = 1
+EXTRA_ARGS += --trace --trace-structs
 include $(shell cocotb-config --makefiles)/Makefile.sim
 """
     (sim_dir / "Makefile").write_text(makefile_content)
@@ -972,15 +974,34 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
             result, attempt,
         )
         output = (result.stdout + "\n" + result.stderr)[-5000:]
-        passed = result.returncode == 0
+        no_tests = "No tests were discovered" in output
+        if no_tests:
+            output = (
+                "COCOTB ERROR: No tests were discovered. Treating simulation "
+                "as failed to prevent DV false pass.\n" + output
+            )
 
         vcd_path = sim_dir / "dump.vcd"
+        audit_path = sim_dir / "wavekit_audit.json"
+        wavekit_audit = run_wavekit_vcd_audit(vcd_path, audit_path)
+        passed = (
+            result.returncode == 0
+            and not no_tests
+            and wavekit_audit.get("ok") is True
+        )
+        if not wavekit_audit.get("ok"):
+            output = (
+                "WAVEKIT VCD AUDIT FAILED: "
+                f"{wavekit_audit.get('error', 'unknown error')}\n" + output
+            )
         return {
             "passed": passed,
             "log": output,
             "returncode": result.returncode,
             "log_path": log_path,
             "vcd_path": str(vcd_path) if vcd_path.exists() else "",
+            "wavekit_audit_path": str(audit_path),
+            "wavekit_audit": wavekit_audit,
         }
     except subprocess.TimeoutExpired:
         cmd = [make_bin, "-C", str(sim_dir)]

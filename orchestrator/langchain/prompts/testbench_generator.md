@@ -159,6 +159,13 @@ RULES:
     broken, implement the reference algorithm directly in the test file.
     For example, a forward DCT reference can be written in ~15 lines of
     numpy. This is preferable to a test that crashes at import time.
+15. VCD/WAVEKIT AUDIT -- MANDATORY:
+    The pipeline runs cocotb under Verilator with tracing enabled, expects
+    `sim_build/<block>/dump.vcd`, and inspects that VCD with WaveKit. Your
+    tests must exercise reset, primary handshakes, representative datapath
+    activity, sideband metadata, and terminal outputs so the waveform audit
+    has meaningful transitions. Do not disable tracing, skip clocks, or
+    create tests that pass without advancing simulated time.
 
 TESTBENCH REUSE -- IMPORTANT:
 Before generating a new testbench, check if the output file already exists

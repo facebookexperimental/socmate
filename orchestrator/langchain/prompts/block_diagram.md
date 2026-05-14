@@ -20,6 +20,10 @@ RULES:
    - rtl_target: path for generated Verilog (e.g. "rtl/<subsystem>/<name>.v")
    - testbench: path for cocotb testbench (e.g. "tb/cocotb/test_<name>.py")
    - interfaces: dict of port groups (e.g. {{"input": {{"width": 8}}, "output": {{"width": 8}}}})
+   - semantic_contracts: list of block-level invariants this block must preserve
+     for downstream correctness. Include mode/metadata alignment, predictor
+     state, reconstruction state, ordering, packet boundaries, numeric formats,
+     error bounds, and any golden-model equivalence obligations.
    - estimated_gates: rough gate count estimate (use benchmark data if available)
 4. Specify connections between blocks as a list of:
    {{from, to, interface, data_width, bus_name}}
@@ -40,6 +44,30 @@ RULES:
    and clock-gating cells automatically during top-level integration. Individual
    blocks should simply declare `clk` and `rst_n` ports and assume clean,
    synchronized signals are provided.
+
+SEMANTIC CONTRACT AND STATEFUL FEEDBACK RULES:
+- The block diagram is not only a wiring diagram. It MUST document the
+  semantic invariants that make the decomposition correct.
+- Identify every stateful feedback loop, recurrence, predictor, history buffer,
+  context table, adaptive model, rolling checksum, entropy state, or closed-loop
+  reconstruction path. For each loop, state what value is fed back, when it is
+  updated, and what golden-model value it must equal or approximate.
+- For algorithmic pipelines such as codecs, compression engines, DSP chains,
+  crypto/protocol engines, ML accelerators, or parsers, do not split blocks only
+  by operation names. Also preserve the semantic state needed at the decision
+  point. If a downstream block must choose among modes/candidates, it must
+  receive or be able to reconstruct the exact predictor/context/metadata used to
+  generate each candidate.
+- If an encoder, predictor, quantizer, entropy coder, decoder model, or feedback
+  context must remain synchronized, include an explicit invariant such as:
+  "encoder feedback reconstruction after each block == decoder/golden
+  reconstruction used for future prediction, within <bound>."
+- If a required invariant cannot be satisfied by the proposed block interfaces,
+  add a blocking question or merge/repartition blocks. Do not rely on a later
+  RTL agent to infer missing semantic state.
+- Every connection may include a `semantic_contract` string describing payload
+  layout, ordering, sideband metadata, valid modes, numeric format, and golden
+  equivalence obligation. Use it whenever raw `data_width` is insufficient.
 
 SUBSYSTEM GUIDELINES:
 - Group blocks into logical subsystems to organize the block diagram visually.
@@ -73,8 +101,13 @@ ESCALATION RULES (critical -- prefer asking over assuming):
 {feedback_context}
 
 Output a single JSON object with these fields:
-- blocks: list of block specifications (each with subsystem field)
-- connections: list of block-to-block connections (each with optional bus_name)
+- blocks: list of block specifications (each with subsystem and semantic_contracts fields)
+- connections: list of block-to-block connections (each with optional bus_name
+  and optional semantic_contract)
+- system_invariants: list of cross-block invariants that must be preserved and
+  later verified. Each item should include:
+  {{id, description, affected_blocks, required_state, verification_method}}
 - reasoning: string explaining your architectural decisions (mention subsystem
-  grouping rationale and bus topology choices)
+  grouping rationale, bus topology choices, and how stateful feedback loops are
+  made safe)
 - questions: list of {{question, context, priority}} if any (priority: "blocking" or "clarifying")

@@ -8,6 +8,8 @@ JSON to the path specified in the user message.
 
 Given (read from disk -- file paths provided in user message):
 - Error logs (step logs in .socmate/step_logs/ and .socmate/blocks/<block>/previous_error.txt)
+- VCD waveform artifacts (`sim_build/<block>/dump.vcd` or
+  `sim_build/integration/dump.vcd`) and WaveKit audit reports
 - RTL source code (full Verilog file)
 - Testbench source code (full cocotb test file)
 - Microarchitecture specification (design intent)
@@ -63,7 +65,10 @@ COMMON FAILURE PATTERNS (check these FIRST before detailed analysis):
    with diagnosis "false positive: prose words are not port names".
 
 Your job:
-1. Identify which signal diverged first (if waveform info available).
+1. Identify which signal diverged first. Read the WaveKit audit report and
+   inspect the VCD when it exists. If the VCD or WaveKit audit is missing,
+   empty, or header-only, classify that as a DV/process failure and include
+   a concrete fix to restore waveform dumping/auditing.
 2. Determine the root cause category:
    - LOGIC_ERROR: incorrect combinational/sequential logic
    - TIMING_ISSUE: race condition, setup/hold violation

@@ -117,6 +117,15 @@ class IntegrationTestbenchGenerator:
                     f"All block RTL files (space-separated):\n{verilog_sources}"
                 )
 
+            parts.append(
+                "\n--- VCD / WAVEKIT REQUIREMENT ---\n"
+                "The pipeline will dump sim_build/integration/dump.vcd and "
+                "audit it with WaveKit. Generate tests that advance time and "
+                "exercise reset, top-level handshakes, block-boundary flow, "
+                "backpressure, sideband metadata, and final outputs so the "
+                "waveform audit contains meaningful evidence."
+            )
+
             user_message = "\n".join(p for p in parts if p)
 
             content = await self.llm.call(

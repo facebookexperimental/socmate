@@ -33,3 +33,4 @@ mapbox-earcut>=1.0.0
 # Cocotb (RTL simulation)
 cocotb>=2.0
 cocotb-bus>=0.3.0
+wavekit>=0.5.6

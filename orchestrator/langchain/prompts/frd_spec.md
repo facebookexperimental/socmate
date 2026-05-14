@@ -33,6 +33,23 @@ A numbered list of performance requirements.  Each entry MUST include:
 ## Interface Requirements
 Same format as above with IDs: IFACE-NNN.
 
+## Semantic Invariants
+Cross-block correctness invariants with IDs: INV-NNN. Each entry MUST include:
+- **ID**: INV-NNN
+- **Invariant**: what state, metadata, payload, ordering, or feedback value
+  must be preserved across blocks
+- **Affected blocks/interfaces**: exact blocks and interfaces involved
+- **Acceptance criteria**: measurable equality/bound against a golden model,
+  trace point, or self-checking rule
+- **Validation method**: how integration or validation DV can observe it,
+  including VCD-visible signals if applicable
+- **Priority**: must_have | should_have | nice_to_have
+
+For stateful feedback algorithms such as codecs, predictors, compression,
+crypto/protocol engines, parsers, or adaptive filters, include at least one
+INV-NNN requirement proving that internal feedback/context state remains
+synchronized with the emitted output or golden model.
+
 ## Timing Requirements
 Same format as above with IDs: TIME-NNN.
 
@@ -88,12 +105,18 @@ verified in simulation or on silicon.  Must also cover:
 - How each PRD validation KPI is verified by validation DV, including the
   measurable metric, threshold, stimulus, reference model if any, and pass/fail
   criterion
+- How each INV-NNN semantic invariant is verified by integration/validation DV,
+  including the first-divergence trace point and VCD-visible evidence
 
 GUIDELINES:
 - Every requirement MUST have a measurable acceptance criterion
 - Every human-provided validation KPI from the PRD MUST become a measurable
   FRD requirement with an ID and acceptance criterion. Do not weaken, drop, or
   replace it with a vague qualitative statement.
+- If the design has a stateful feedback loop, adaptive context, mode decision,
+  predictor, entropy state, reconstruction loop, or history-dependent output,
+  the FRD MUST include Semantic Invariants that bind the split hardware blocks
+  to the golden model. Do not rely on final output checks alone.
 - Use concrete numbers: "latency < 100 us", "throughput >= 1 Gbps",
   "drift < 1 deg/min", NOT vague statements like "low latency"
 - Derive requirements from the PRD's functional_requirements and

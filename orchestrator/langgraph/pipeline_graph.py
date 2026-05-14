@@ -303,6 +303,9 @@ class OrchestratorState(TypedDict):
     # Validation DV results ────────────────────────────────────────────────
     validation_dv_result: Optional[dict]  # set by validation_dv node
 
+    # Top-level contract audit results ─────────────────────────────────────
+    contract_audit_result: Optional[dict]  # set by integration/validation DV failure triage
+
     # Terminal ──────────────────────────────────────────────────────────────
     pipeline_done: bool
     pipeline_aborted: bool  # set by pipeline_complete_node on abort resume
@@ -2561,6 +2564,18 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
 
         span.set_attribute("passed", False)
 
+        contract_audit = await _run_top_level_contract_audit(
+            stage="integration_dv",
+            project_root=pr,
+            design_name=design_name,
+            top_rtl_path=top_rtl_path,
+            testbench_path=tb_path,
+            test_count=test_count,
+            sim_log=sim_log,
+            sim_log_path=sim_result.get("log_path", ""),
+            block_rtl_paths=block_rtl_paths,
+        )
+
         payload = {
             "type": "integration_dv_failure",
             "design_name": design_name,
@@ -2570,6 +2585,8 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
             "sim_log": sim_log[-3000:],
             "sim_log_path": sim_result.get("log_path", ""),
             "block_rtl_paths": block_rtl_paths,
+            "contract_audit": contract_audit,
+            "contract_audit_path": contract_audit.get("audit_path", ""),
             "supported_actions": [
                 "retry",        # regenerate testbench + re-simulate
                 "fix_rtl",      # outer agent fixed RTL, re-run sim only
@@ -2592,11 +2609,15 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
                 "5. After fixing, resume_pipeline(action='fix_rtl' or 'fix_tb') "
                 "to re-run integration DV.\n"
                 "6. Only escalate to the user for architectural issues."
+                "\n\nContract audit result: "
+                f"{contract_audit.get('category', 'UNKNOWN')} -- "
+                f"{contract_audit.get('outer_agent_summary', '')}"
             ),
             "reference_files": {
                 "top_rtl": top_rtl_path,
                 "testbench": tb_path,
                 "sim_log": sim_result.get("log_path", ""),
+                "contract_audit": contract_audit.get("audit_path", ""),
             },
         }
 
@@ -2623,6 +2644,8 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
             "sim_log_path": sim_result.get("log_path", ""),
             "design_name": design_name,
             "action_taken": action,
+            "contract_audit": contract_audit,
+            "contract_audit_path": contract_audit.get("audit_path", ""),
         }
 
         if action == "skip":
@@ -2678,6 +2701,85 @@ def _load_ers_validation_context(project_root: str) -> tuple[str, int]:
         _count_value(ers.get(key))
 
     return json.dumps(data, indent=2), req_count
+
+
+async def _run_top_level_contract_audit(
+    *,
+    stage: str,
+    project_root: str,
+    design_name: str,
+    top_rtl_path: str,
+    testbench_path: str,
+    test_count: int,
+    requirement_count: int = 0,
+    sim_log: str = "",
+    sim_log_path: str = "",
+    block_rtl_paths: dict[str, str] | None = None,
+) -> dict:
+    """Run contract audit for a top-level DV failure.
+
+    The audit is deliberately pipeline-owned: validation/integration failures
+    are first classified as TB/local RTL/top wiring/contract before the outer
+    agent is interrupted.
+    """
+    from orchestrator.langchain.agents.contract_audit_agent import ContractAuditAgent
+
+    root = Path(project_root)
+    audit_dir = root / ".socmate" / "contract_audit"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    safe_stage = re.sub(r"[^a-zA-Z0-9_]+", "_", stage).strip("_") or "unknown"
+    context_path = audit_dir / f"{safe_stage}_failure_context.json"
+    output_path = audit_dir / f"{safe_stage}_contract_audit.json"
+
+    context = {
+        "stage": stage,
+        "design_name": design_name,
+        "top_rtl_path": top_rtl_path,
+        "testbench_path": testbench_path,
+        "test_count": test_count,
+        "requirement_count": requirement_count,
+        "sim_log_tail": sim_log[-12000:],
+        "sim_log_path": sim_log_path,
+        "block_rtl_paths": block_rtl_paths or {},
+        "reference_files": {
+            "ers_json": str(root / ".socmate" / "ers_spec.json"),
+            "prd_json": str(root / ".socmate" / "prd_spec.json"),
+            "block_diagram": str(root / ".socmate" / "block_diagram.json"),
+            "integration_vcd": str(root / "sim_build" / "integration" / "dump.vcd"),
+            "integration_wavekit_audit": str(
+                root / "sim_build" / "integration" / "wavekit_audit.json"
+            ),
+        },
+    }
+    context_path.write_text(json.dumps(context, indent=2), encoding="utf-8")
+
+    log(f"  [CONTRACT-AUDIT] Auditing {stage} failure...", YELLOW)
+    agent = ContractAuditAgent(temperature=0.1)
+    result = await agent.analyze(
+        stage=stage,
+        project_root=project_root,
+        context_path=str(context_path),
+        output_path=str(output_path),
+    )
+
+    write_graph_event(project_root, "Contract Audit", "graph_node_exit", {
+        "stage": stage,
+        "category": result.get("category", "UNKNOWN"),
+        "contract_failure": result.get("contract_failure", False),
+        "recommended_action": result.get("recommended_action", ""),
+        "confidence": result.get("confidence", 0),
+        "audit_path": str(output_path),
+    })
+    log(
+        "  [CONTRACT-AUDIT] "
+        f"{result.get('category', 'UNKNOWN')} "
+        f"action={result.get('recommended_action', 'ask_human')} "
+        f"confidence={result.get('confidence', 0)}",
+        RED if result.get("contract_failure") else YELLOW,
+    )
+    result["audit_path"] = str(output_path)
+    result["context_path"] = str(context_path)
+    return result
 
 
 def route_after_integration_dv(state: OrchestratorState) -> str:
@@ -2820,6 +2922,19 @@ async def validation_dv_node(state: OrchestratorState) -> dict:
             if line.strip():
                 log(f"    {line.strip()}", RED)
 
+        contract_audit = await _run_top_level_contract_audit(
+            stage="validation_dv",
+            project_root=pr,
+            design_name=design_name,
+            top_rtl_path=top_rtl_path,
+            testbench_path=tb_path,
+            test_count=test_count,
+            requirement_count=requirement_count,
+            sim_log=sim_log,
+            sim_log_path=sim_result.get("log_path", ""),
+            block_rtl_paths=block_rtl_paths,
+        )
+
         payload = {
             "type": "validation_dv_failure",
             "design_name": design_name,
@@ -2830,6 +2945,8 @@ async def validation_dv_node(state: OrchestratorState) -> dict:
             "sim_log": sim_log[-3000:],
             "sim_log_path": sim_result.get("log_path", ""),
             "block_rtl_paths": block_rtl_paths,
+            "contract_audit": contract_audit,
+            "contract_audit_path": contract_audit.get("audit_path", ""),
             "supported_actions": [
                 "retry",
                 "fix_rtl",
@@ -2843,13 +2960,16 @@ async def validation_dv_node(state: OrchestratorState) -> dict:
                 "RTL with action='fix_rtl' or fix the generated validation "
                 "testbench with action='fix_tb'. Do not skip this stage unless "
                 "the pipeline is explicitly configured to permit validation "
-                "skips."
+                "skips.\n\nContract audit result: "
+                f"{contract_audit.get('category', 'UNKNOWN')} -- "
+                f"{contract_audit.get('outer_agent_summary', '')}"
             ),
             "reference_files": {
                 "top_rtl": top_rtl_path,
                 "testbench": tb_path,
                 "sim_log": sim_result.get("log_path", ""),
                 "ers": str(Path(pr) / ".socmate" / "ers_spec.json"),
+                "contract_audit": contract_audit.get("audit_path", ""),
             },
         }
 
@@ -2877,6 +2997,8 @@ async def validation_dv_node(state: OrchestratorState) -> dict:
             "sim_log_path": sim_result.get("log_path", ""),
             "design_name": design_name,
             "action_taken": action,
+            "contract_audit": contract_audit,
+            "contract_audit_path": contract_audit.get("audit_path", ""),
         }
 
         if action == "skip":

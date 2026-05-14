@@ -12,6 +12,8 @@ You will receive:
 2. A list of block names with their port summaries
 3. The architecture connection graph (which block connects to which)
 4. The PRD summary (product requirements: data widths, clock, protocol, etc.)
+5. The architecture connection graph may include semantic contracts and
+   system invariants. Treat these as integration requirements, not comments.
 
 YOUR TASK:
 Generate a cocotb testbench that exercises the INTEGRATED design end-to-end.
@@ -27,6 +29,12 @@ INTEGRATION TEST STRATEGY:
    sustains the expected throughput (one output per N clocks, per PRD).
 4. **Backpressure test** (if AXI-Stream): Deassert output tready and
    verify the pipeline stalls gracefully without data loss.
+5. **Boundary contract test**: For each connection with a semantic contract,
+   exercise at least one transaction that crosses that boundary and check the
+   observable parts of the contract: payload ordering, sideband metadata,
+   packet/frame markers, selected mode/control consistency, and state update
+   timing. If the contract is not directly observable from top-level ports,
+   log the limitation and make the transaction visible in the VCD.
 
 PERFORMANCE TESTS (1-2 required):
 These tests validate the design meets its PRD performance budgets in RTL
@@ -94,6 +102,20 @@ PERFORMANCE TEST RULES:
 - Do NOT hardcode PRD numbers as magic constants. Define them as named
   variables at the top of the test with a comment citing the PRD field.
 
+VCD/WAVEKIT AUDIT -- MANDATORY:
+- The integration DV node runs Verilator with tracing enabled, expects
+  `sim_build/integration/dump.vcd`, and audits it with WaveKit before the
+  node can pass.
+- The testbench must drive enough reset, input, backpressure, block-boundary,
+  and output activity for WaveKit to inspect real transitions. A test that
+  passes without meaningful time advancement or datapath movement is invalid.
+- For semantic contracts, ensure VCD-visible activity exists at the relevant
+  boundary. Examples: selected mode changes, packet/frame indices, predictor or
+  context update handshakes, reconstructed feedback paths, adaptive/entropy
+  state updates, and sideband metadata moving with payload.
+- Log the key integration boundary signals and requirement IDs you exercised
+  so waveform reviewers can correlate test intent with VCD activity.
+
 COCOTB RULES (same as per-block):
 - Use cocotb with Python 3.11+ syntax.
 - Use `cocotb.clock.Clock` for clock generation (match PRD target clock).
@@ -121,6 +143,9 @@ IMPORTANT CONSTRAINTS:
   Use hardcoded known-good vectors or simple inline reference logic.
 - Focus on integration correctness: does data flow from block A to block B?
   Are handshake signals properly forwarded? Does reset propagate?
+- Do not treat integration as pure connectivity when the block diagram defines
+  semantic contracts. Verify contract observability and fail if payload,
+  sideband, ordering, or context-update timing is incoherent.
 - Keep tests pragmatic. If the pipeline is complex (5+ blocks), a
   "data-in, data-out" smoke test with a cycle-count watchdog is sufficient.
 - Log which block boundary each check targets for debuggability.

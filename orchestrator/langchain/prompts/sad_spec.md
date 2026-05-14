@@ -33,6 +33,19 @@ Explain what is done in hardware vs firmware vs software, and why.
 Describe at least 2-3 system-level data/control flows.  Use a
 subsection (###) for each flow with a step-by-step description.
 
+## Stateful Feedback and Semantic Contracts
+Identify every stateful feedback loop, predictor/context dependency,
+history-dependent output, adaptive state machine, rolling checksum, entropy
+state, reconstruction loop, or cross-block recurrence. For each item state:
+- Which blocks own, update, and consume the state
+- What semantic value must be preserved across the block boundary
+- What golden-model trace point defines correctness
+- Whether the contract requires exact equality or a numeric tolerance
+- What must be verified in integration/validation DV
+
+If the design has no such loops, explicitly state why the datapath is purely
+feed-forward and why final-output validation is sufficient.
+
 ## Technology Rationale
 Why the chosen PDK/process; trade-offs considered.
 
@@ -86,6 +99,9 @@ GUIDELINES:
 - Be specific about trade-offs (area vs speed, power vs throughput, etc.)
 - The SAD will feed into the FRD (Functional Requirements Document)
   and Block Diagram, so ensure enough detail for those downstream consumers
+- The Block Diagram agent must preserve the contracts in "Stateful Feedback
+  and Semantic Contracts"; if a proposed split cannot preserve required state,
+  state that the blocks must be merged or a wider semantic interface is needed.
 - The Shuttle Integration section is CRITICAL for tapeout feasibility --
   a design that passes all functional checks but exceeds the shuttle's
   pad count or area is not submittable
