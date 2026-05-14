@@ -522,11 +522,28 @@ async def run(args: argparse.Namespace) -> int:
             if "error" in result:
                 return 1
             continue
-        if (state.get("pipeline_done") or state.get("status") == "done") and not next_nodes:
+        if state.get("pipeline_done") and not next_nodes:
             print("[top] pipeline finished", flush=True)
             print(json.dumps(state, indent=2), flush=True)
             break
+        if state.get("status") == "done" and not next_nodes:
+            if state.get("completed_count") == state.get("total_blocks"):
+                print("[top] pipeline finished", flush=True)
+                print(json.dumps(state, indent=2), flush=True)
+                break
+            print("[top] pipeline stopped before all blocks completed", flush=True)
+            print(json.dumps(state, indent=2), flush=True)
+            return 1
         if state.get("status") == "interrupted":
+            payload = state.get("interrupt_payload") or {}
+            if (
+                isinstance(payload, dict)
+                and payload.get("type") == "uarch_integration_review"
+                and int(payload.get("issues_found", 0) or 0) == 0
+            ):
+                print("[pipeline] auto-approving clean uarch integration review", flush=True)
+                print(await mcp.resume_pipeline(action="approve"), flush=True)
+                continue
             actions = state.get("interrupt_actions") or []
             interrupted = state.get("interrupted_blocks") or []
             for item in interrupted:
