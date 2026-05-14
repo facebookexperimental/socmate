@@ -165,8 +165,11 @@ async def _wait_for_question_answers(kind: str, poll_s: float) -> dict:
 async def _wait_for_decision(kind: str, poll_s: float, escalation_path: Path | None = None) -> dict:
     esc_dir = PROJECT_ROOT / ".socmate" / "escalations"
     decision_path = esc_dir / f"{kind}.decision.json"
+    retry_interval_s = float(os.environ.get("SOCMATE_HEADLESS_TRIAGE_RETRY_S", "600"))
+    last_triage_start = 0.0
     if escalation_path and not decision_path.exists():
         _start_triage_agent(escalation_path)
+        last_triage_start = time.monotonic()
     print(f"[headless] decision pending: write JSON to {decision_path}", flush=True)
     while True:
         if decision_path.exists():
@@ -177,6 +180,13 @@ async def _wait_for_decision(kind: str, poll_s: float, escalation_path: Path | N
             raise RuntimeError(
                 f"Decision at {decision_path} must be a JSON object with an action"
             )
+        if (
+            escalation_path
+            and _triage_agent_enabled()
+            and time.monotonic() - last_triage_start >= retry_interval_s
+        ):
+            _start_triage_agent(escalation_path)
+            last_triage_start = time.monotonic()
         await asyncio.sleep(max(5.0, poll_s))
 
 

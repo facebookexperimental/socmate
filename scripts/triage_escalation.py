@@ -60,6 +60,21 @@ def _fallback_decision(packet: dict, reason: str) -> dict:
     }
 
 
+def _is_transient_llm_failure(text: str) -> bool:
+    lowered = text.lower()
+    return any(
+        token in lowered
+        for token in (
+            "usage limit",
+            "rate limit",
+            "try again",
+            "temporarily unavailable",
+            "overloaded",
+            "timeout",
+        )
+    )
+
+
 async def triage(path: Path, dry_run: bool = False) -> dict:
     packet = _load_packet(path)
     decision_file = Path(packet.get("decision_file") or path.with_suffix(".decision.json"))
@@ -106,6 +121,11 @@ Read any referenced artifacts from disk. Then return this JSON shape:
         "human_escalation_needed": True,
     }
     decision, parse_ok = parse_llm_json(text, defaults, context="headless triage")
+    if not parse_ok and _is_transient_llm_failure(text):
+        raise RuntimeError(
+            "transient LLM triage failure; leaving decision file absent so "
+            "the headless runner can retry triage"
+        )
     if decision.get("action") not in allowed:
         decision = _fallback_decision(
             packet,
