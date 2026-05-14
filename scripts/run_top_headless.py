@@ -75,6 +75,11 @@ def _write_decision_escalation(kind: str, state: dict, allowed_actions: list[str
     esc_dir.mkdir(parents=True, exist_ok=True)
     path = esc_dir / f"{kind}.json"
     decision_path = esc_dir / f"{kind}.decision.json"
+    if decision_path.exists():
+        stale_path = esc_dir / (
+            f"{kind}.decision.stale-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}.json"
+        )
+        decision_path.replace(stale_path)
     payload = {
         "type": kind,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
