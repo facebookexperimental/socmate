@@ -1339,3 +1339,23 @@ class TestPerDocPersistence:
                 "architecture_state.json still written "
                 "(expected until per-doc migration is complete)"
             )
+
+
+class TestFinalizeBlockSpecs:
+    def test_non_silicon_validation_block_is_not_frontend_work_item(self):
+        from orchestrator.langgraph.architecture_graph import (
+            _is_non_silicon_validation_block,
+        )
+
+        assert _is_non_silicon_validation_block({
+            "name": "flow_smoke_checks",
+            "description": "Non-synthesizable validation harness definition",
+            "rtl_target": "",
+            "estimated_gates": 0,
+        })
+        assert not _is_non_silicon_validation_block({
+            "name": "adder32",
+            "description": "Pure combinational 32-bit unsigned adder",
+            "rtl_target": "rtl/adder32.v",
+            "estimated_gates": 240,
+        })

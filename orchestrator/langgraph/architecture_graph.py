@@ -1162,6 +1162,31 @@ async def constraint_check_node(state: ArchGraphState) -> dict:
         return update
 
 
+def _is_non_silicon_validation_block(block: dict) -> bool:
+    """Return True for architecture-only validation/reporting blocks.
+
+    These blocks are important ERS/DV collateral, but they are not RTL pipeline
+    work items and should not be handed to lint/sim/synthesis/backend.
+    """
+    name = str(block.get("name", "")).lower()
+    desc = str(block.get("description", "")).lower()
+    rtl_target = str(block.get("rtl_target", "") or "").strip()
+    estimated_gates = block.get("estimated_gates", None)
+    text = f"{name} {desc}"
+    marker = any(
+        token in text
+        for token in (
+            "flow_smoke",
+            "smoke_check",
+            "validation harness",
+            "validation artifact",
+            "non-synthesizable",
+            "non-silicon",
+        )
+    )
+    return marker and (not rtl_target or estimated_gates in (0, "0", None))
+
+
 async def finalize_node(state: ArchGraphState) -> dict:
     """Finalize architecture: persist state and write block_specs.json."""
     from orchestrator.architecture.state import load_state, save_state
@@ -1193,7 +1218,11 @@ async def finalize_node(state: ArchGraphState) -> dict:
         # Build block specs
         blocks = state["block_diagram"].get("blocks", [])
         block_specs = []
+        skipped_non_silicon = []
         for block in blocks:
+            if _is_non_silicon_validation_block(block):
+                skipped_non_silicon.append(block.get("name", ""))
+                continue
             spec = {
                 "name": block.get("name", ""),
                 "tier": block.get("tier", 1),
@@ -1217,10 +1246,13 @@ async def finalize_node(state: ArchGraphState) -> dict:
 
         span.set_attribute("block_count", len(block_specs))
         span.set_attribute("specs_path", str(specs_path))
+        if skipped_non_silicon:
+            span.set_attribute("skipped_non_silicon_blocks", ",".join(skipped_non_silicon))
 
         _event(state, "Finalize Architecture", "graph_node_exit", {
             "round": state["round"],
             "block_count": len(block_specs),
+            "skipped_non_silicon_blocks": skipped_non_silicon,
         })
 
         return {
