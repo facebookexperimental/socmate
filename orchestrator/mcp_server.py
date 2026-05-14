@@ -3347,10 +3347,10 @@ async def resume_backend(
         })
 
     if _backend.status not in ("interrupted", "paused"):
-        # Self-heal: check checkpoint for pending interrupts.
-        # Only self-heal when the asyncio task has finished -- if it's
-        # still running, the checkpoint data may be stale.
-        if _backend.status == "running" and _backend.thread_id:
+        # Self-heal: check checkpoint for pending interrupts.  A fresh MCP
+        # process can have status "idle" even when the persisted backend
+        # thread is interrupted and resumable.
+        if _backend.thread_id:
             if _backend.task is None or _backend.task.done():
                 try:
                     await _backend.ensure_graph()
