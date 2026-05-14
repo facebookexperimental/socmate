@@ -266,9 +266,9 @@ class TestRouteAfterPRDEscalation:
         state = {"human_response": {"action": "abort"}}
         assert route_after_prd_escalation(state) == "Abort"
 
-    def test_default_goes_to_gather_requirements(self):
+    def test_missing_action_fails_closed_to_abort(self):
         state = {}
-        assert route_after_prd_escalation(state) == "Gather Requirements"
+        assert route_after_prd_escalation(state) == "Abort"
 
 
 class TestReviewDiagram:
@@ -302,9 +302,9 @@ class TestRouteAfterDiagramEscalation:
         state = {"human_response": {"action": "abort"}}
         assert route_after_diagram_escalation(state) == "Abort"
 
-    def test_default_goes_to_memory_map(self):
+    def test_missing_action_fails_closed_to_abort(self):
         state = {}
-        assert route_after_diagram_escalation(state) == "Memory Map"
+        assert route_after_diagram_escalation(state) == "Abort"
 
 
 class TestRouteAfterConstraints:
@@ -342,9 +342,9 @@ class TestRouteAfterConstraintEscalation:
         state = {"human_response": {"action": "abort"}}
         assert route_after_constraint_escalation(state) == "Abort"
 
-    def test_default_goes_to_block_diagram(self):
+    def test_missing_action_fails_closed_to_abort(self):
         state = {}
-        assert route_after_constraint_escalation(state) == "Block Diagram"
+        assert route_after_constraint_escalation(state) == "Abort"
 
 
 class TestRouteAfterIncrement:
@@ -374,9 +374,9 @@ class TestRouteAfterExhaustedEscalation:
         state = {"human_response": {"action": "abort"}}
         assert route_after_exhausted_escalation(state) == "Abort"
 
-    def test_default_goes_to_block_diagram(self):
+    def test_missing_action_fails_closed_to_abort(self):
         state = {}
-        assert route_after_exhausted_escalation(state) == "Block Diagram"
+        assert route_after_exhausted_escalation(state) == "Abort"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -613,7 +613,7 @@ SIM = verilator
 TOPLEVEL_LANG = verilog
 VERILOG_SOURCES = {rtl_path}
 TOPLEVEL = {block_name}
-COCOTB_TEST_MODULES = test_{block_name}
+MODULE = test_{block_name}
 WAVES = 1
 EXTRA_ARGS += --trace --trace-structs
 include $(shell cocotb-config --makefiles)/Makefile.sim
@@ -647,10 +647,21 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
         )
         log_path = _write_step_log(block_name, "simulate", [make_bin, "-C", str(sim_dir)], result, attempt)
         output = (result.stdout + "\n" + result.stderr)[-5000:]
+        no_tests = "No tests were discovered" in output
+        if no_tests:
+            output = (
+                "COCOTB ERROR: No tests were discovered. Treating simulation "
+                "as failed to prevent DV false pass.\n" + output
+            )
+
         vcd_path = sim_dir / "dump.vcd"
         audit_path = sim_dir / "wavekit_audit.json"
         wavekit_audit = run_wavekit_vcd_audit(vcd_path, audit_path)
-        passed = result.returncode == 0 and wavekit_audit.get("ok") is True
+        passed = (
+            result.returncode == 0
+            and not no_tests
+            and wavekit_audit.get("ok") is True
+        )
         if not wavekit_audit.get("ok"):
             output = (
                 "WAVEKIT VCD AUDIT FAILED: "

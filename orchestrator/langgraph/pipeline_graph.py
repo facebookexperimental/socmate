@@ -1393,17 +1393,19 @@ async def ask_human_node(state: BlockState) -> dict:
         ],
         # Guidance for the outer agent
         "outer_agent_guidance": (
-            "You are the outer-loop diagnostic agent. Before escalating to "
-            "the user, try to diagnose and fix the issue yourself:\n"
-            "1. If confidence >= 0.7 and attempt < max_attempts-1: "
-            "auto-retry with resume_pipeline(action='retry')\n"
-            "2. If category is INTERFACE_MISMATCH or UARCH_SPEC_ERROR: "
-            "read the RTL and uarch spec, then inject a constraint\n"
-            "3. If the same category appears 2+ times: the inner loop is "
-            "stuck -- read the RTL, diagnose it, edit on disk, then "
-            "resume_pipeline(action='fix_rtl')\n"
-            "4. Only escalate to the user if you genuinely cannot diagnose "
-            "the issue or confidence < 0.5"
+            "You are the outer-loop diagnostic agent. Do not auto-accept or "
+            "blindly retry. Read the OTEL events, step logs, RTL, uarch spec, "
+            "testbench, VCD/WaveKit audit, and ERS contract before choosing an "
+            "action:\n"
+            "1. Classify the root cause and cite concrete evidence.\n"
+            "2. If the failure is infrastructure or testbench-only, fix that "
+            "shared issue first, then explicitly choose retry or fix_tb.\n"
+            "3. If the failure is RTL/spec behavior, edit the relevant RTL or "
+            "add a precise constraint, then resume with fix_rtl or "
+            "add_constraint.\n"
+            "4. If the measurable ERS KPI cannot be verified or the evidence "
+            "is inconclusive, escalate to a human with the missing facts.\n"
+            "5. Record a rationale with every decision."
         ),
     }
 
@@ -1438,7 +1440,7 @@ async def ask_human_node(state: BlockState) -> dict:
         "block": block_name, "action": response.get("action", "unknown"),
     })
 
-    action = response.get("action", "retry")
+    action = response.get("action", "abort")
     updated: dict = {"human_response": response}
 
     if action == "add_constraint" and response.get("constraint"):
@@ -1547,7 +1549,7 @@ async def block_done_node(state: BlockState) -> dict:
 def route_after_uarch_review(state: BlockState) -> str:
     """Route after uarch spec review: approve -> generate_rtl, revise -> regenerate, skip -> block_done."""
     response = state.get("human_response") or {}
-    action = response.get("action", "approve")
+    action = response.get("action", "abort")
     if action == "approve":
         return "generate_rtl"
     elif action == "revise":
@@ -1850,7 +1852,7 @@ async def integration_review_node(state: OrchestratorState) -> dict:
     }
 
     response = interrupt(payload)
-    action = response.get("action", "approve")
+    action = response.get("action", "abort")
 
     write_graph_event(pr, "Integration Review", "graph_node_exit", {
         "action": action, "issues_found": issues_found,
@@ -2354,7 +2356,7 @@ async def integration_check_node(state: OrchestratorState) -> dict:
 
             response = interrupt(payload)
 
-            action = response.get("action", "retry")
+            action = response.get("action", "abort")
             write_graph_event(pr, "Integration Check", "graph_node_exit", {
                 "action": action,
                 "error_count": len(errors),
@@ -2630,7 +2632,7 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
 
         response = interrupt(payload)
 
-        action = response.get("action", "retry")
+        action = response.get("action", "abort")
         write_graph_event(pr, "Integration DV", "graph_node_exit", {
             "action": action,
             "passed": False,
@@ -2981,7 +2983,7 @@ async def validation_dv_node(state: OrchestratorState) -> dict:
             payload["supported_actions"].insert(-1, "skip")
 
         response = interrupt(payload)
-        action = response.get("action", "retry")
+        action = response.get("action", "abort")
         write_graph_event(pr, "Validation DV", "graph_node_exit", {
             "action": action,
             "passed": False,

@@ -7,6 +7,8 @@ import argparse
 import asyncio
 import json
 import os
+import shlex
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -102,6 +104,45 @@ def _write_decision_escalation(kind: str, state: dict, allowed_actions: list[str
     return path
 
 
+def _triage_agent_enabled() -> bool:
+    value = os.environ.get("SOCMATE_HEADLESS_TRIAGE_AGENT", "1").strip().lower()
+    return value not in {"0", "false", "no", "off", "none"}
+
+
+def _start_triage_agent(escalation_path: Path) -> None:
+    if not _triage_agent_enabled():
+        return
+    log_path = escalation_path.with_suffix(".triage.log")
+    cmd_env = os.environ.get("SOCMATE_HEADLESS_TRIAGE_COMMAND", "").strip()
+    if cmd_env:
+        cmd = shlex.split(cmd_env) + [str(escalation_path)]
+    else:
+        cmd = [
+            sys.executable,
+            str(PROJECT_ROOT / "scripts" / "triage_escalation.py"),
+            "--escalation",
+            str(escalation_path),
+        ]
+
+    env = os.environ.copy()
+    env.setdefault("SOCMATE_PROJECT_ROOT", str(PROJECT_ROOT))
+    env.setdefault("PYTHONPATH", str(PROJECT_ROOT))
+    with log_path.open("ab") as log:
+        log.write(
+            f"\n[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] "
+            f"starting triage command: {' '.join(cmd)}\n".encode()
+        )
+        subprocess.Popen(
+            cmd,
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    print(f"[headless] started triage agent; log={log_path}", flush=True)
+
+
 async def _wait_for_question_answers(kind: str, poll_s: float) -> dict:
     esc_dir = PROJECT_ROOT / ".socmate" / "escalations"
     answers_path = esc_dir / f"{kind}.answers.json"
@@ -116,9 +157,11 @@ async def _wait_for_question_answers(kind: str, poll_s: float) -> dict:
         await asyncio.sleep(max(5.0, poll_s))
 
 
-async def _wait_for_decision(kind: str, poll_s: float) -> dict:
+async def _wait_for_decision(kind: str, poll_s: float, escalation_path: Path | None = None) -> dict:
     esc_dir = PROJECT_ROOT / ".socmate" / "escalations"
     decision_path = esc_dir / f"{kind}.decision.json"
+    if escalation_path and not decision_path.exists():
+        _start_triage_agent(escalation_path)
     print(f"[headless] decision pending: write JSON to {decision_path}", flush=True)
     while True:
         if decision_path.exists():
@@ -320,7 +363,9 @@ async def run(args: argparse.Namespace) -> int:
                     ["accept", "feedback", "abort"],
                 )
                 print(f"[arch] wrote final-review escalation to {path}", flush=True)
-                decision = await _wait_for_decision("architecture_final_review", args.poll_s)
+                decision = await _wait_for_decision(
+                    "architecture_final_review", args.poll_s, path
+                )
                 print(await mcp.resume_architecture(
                     decision.get("action", "feedback"),
                     decision.get("feedback", ""),
@@ -343,7 +388,7 @@ async def run(args: argparse.Namespace) -> int:
                     kind, payload_state, ["accept", "feedback", "abort"],
                 )
                 print(f"[arch] wrote architecture escalation to {path}", flush=True)
-                decision = await _wait_for_decision(kind, args.poll_s)
+                decision = await _wait_for_decision(kind, args.poll_s, path)
                 print(await mcp.resume_architecture(
                     decision.get("action", "feedback"),
                     decision.get("feedback", ""),
@@ -361,7 +406,7 @@ async def run(args: argparse.Namespace) -> int:
                     kind, payload_state, ["continue", "feedback", "abort"],
                 )
                 print(f"[arch] wrote unknown-interrupt escalation to {path}", flush=True)
-                decision = await _wait_for_decision(kind, args.poll_s)
+                decision = await _wait_for_decision(kind, args.poll_s, path)
                 print(await mcp.resume_architecture(
                     decision.get("action", "continue"),
                     decision.get("feedback", ""),
@@ -442,7 +487,7 @@ async def run(args: argparse.Namespace) -> int:
                 actions or ["retry", "abort"],
             )
             print(f"[pipeline] wrote interrupt escalation to {path}", flush=True)
-            decision = await _wait_for_decision("pipeline_interrupt", args.poll_s)
+            decision = await _wait_for_decision("pipeline_interrupt", args.poll_s, path)
             action = decision.get("action")
             block_actions = decision.get("block_actions") or {}
             print("[pipeline] applying decision", action, block_actions, flush=True)

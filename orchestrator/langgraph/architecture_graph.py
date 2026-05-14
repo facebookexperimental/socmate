@@ -1465,7 +1465,7 @@ async def escalate_final_review_node(state: ArchGraphState) -> dict:
 
     response = interrupt(payload)
 
-    action = response.get("action", "accept") if isinstance(response, dict) else "accept"
+    action = response.get("action", "abort") if isinstance(response, dict) else "abort"
     feedback_text = response.get("feedback", "") if isinstance(response, dict) else ""
 
     _event(state, "Final Review", "graph_node_exit", {
@@ -1567,7 +1567,7 @@ async def escalate_prd_node(state: ArchGraphState) -> dict:
 
     response = interrupt(payload)
 
-    action = response.get("action", "continue") if isinstance(response, dict) else "continue"
+    action = response.get("action", "abort") if isinstance(response, dict) else "abort"
     has_answers = (
         isinstance(response, dict)
         and isinstance(response.get("answers"), dict)
@@ -1649,7 +1649,7 @@ async def escalate_diagram_node(state: ArchGraphState) -> dict:
 
     response = interrupt(payload)
 
-    action = response.get("action", "continue") if isinstance(response, dict) else "continue"
+    action = response.get("action", "abort") if isinstance(response, dict) else "abort"
 
     feedback_text = response.get("feedback", "") if isinstance(response, dict) else ""
     _event(state, "Escalate Diagram", "graph_node_exit", {
@@ -1717,7 +1717,7 @@ async def escalate_constraints_node(state: ArchGraphState) -> dict:
 
     response = interrupt(payload)
 
-    action = response.get("action", "retry") if isinstance(response, dict) else "retry"
+    action = response.get("action", "abort") if isinstance(response, dict) else "abort"
 
     feedback_text = response.get("feedback", "") if isinstance(response, dict) else ""
     _event(state, "Escalate Constraints", "graph_node_exit", {
@@ -1774,7 +1774,7 @@ async def escalate_exhausted_node(state: ArchGraphState) -> dict:
 
     response = interrupt(payload)
 
-    action = response.get("action", "retry") if isinstance(response, dict) else "retry"
+    action = response.get("action", "abort") if isinstance(response, dict) else "abort"
 
     feedback_text = response.get("feedback", "") if isinstance(response, dict) else ""
     _event(state, "Escalate Exhausted", "graph_node_exit", {
@@ -1826,7 +1826,7 @@ route_after_prd.__edge_labels__ = {
 def route_after_prd_escalation(state: ArchGraphState) -> str:
     """Route after user answers PRD sizing questions."""
     response = state.get("human_response", {}) or {}
-    action = response.get("action", "continue")
+    action = response.get("action", "abort")
 
     if action == "abort":
         target = "Abort"
@@ -1884,7 +1884,7 @@ review_diagram.__edge_labels__ = {
 def route_after_diagram_escalation(state: ArchGraphState) -> str:
     """Route after human reviews diagram questions."""
     response = state.get("human_response", {}) or {}
-    action = response.get("action", "continue")
+    action = response.get("action", "abort")
 
     if action == "abort":
         target = "Abort"
@@ -1952,7 +1952,7 @@ route_after_constraints.__edge_labels__ = {
 def route_after_constraint_escalation(state: ArchGraphState) -> str:
     """Route after human reviews structural constraint violations."""
     response = state.get("human_response", {}) or {}
-    action = response.get("action", "retry")
+    action = response.get("action", "abort")
 
     if action == "abort":
         target = "Abort"
@@ -1981,7 +1981,7 @@ route_after_constraint_escalation.__edge_labels__ = {
 def route_after_final_review(state: ArchGraphState) -> str:
     """Route after human reviews the final architecture: OK2DEV or REVISE."""
     response = state.get("human_response", {}) or {}
-    action = response.get("action", "accept")
+    action = response.get("action", "abort")
 
     if action == "abort":
         target = "Abort"
@@ -2051,7 +2051,7 @@ route_after_increment.__edge_labels__ = {
 def route_after_exhausted_escalation(state: ArchGraphState) -> str:
     """Route after human reviews exhausted-rounds escalation."""
     response = state.get("human_response", {}) or {}
-    action = response.get("action", "retry")
+    action = response.get("action", "abort")
 
     if action == "abort":
         target = "Abort"
