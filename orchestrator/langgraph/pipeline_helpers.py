@@ -227,7 +227,15 @@ def load_config() -> dict:
     if blocks_override:
         with open(blocks_override) as f:
             override = yaml.safe_load(f) or {}
-        config["blocks"] = override.get("blocks", override)
+        blocks = override.get("blocks", override) if isinstance(override, dict) else override
+        if isinstance(blocks, list):
+            config["blocks"] = {
+                block["name"]: {k: v for k, v in block.items() if k != "name"}
+                for block in blocks
+                if isinstance(block, dict) and block.get("name")
+            }
+        else:
+            config["blocks"] = blocks
 
     return config
 

@@ -692,7 +692,13 @@ async def run_pnr_node(state: BackendState) -> dict:
 async def drc_node(state: BackendState) -> dict:
     """Run Magic DRC, GDS generation, and SPICE extraction entirely
     within the inner Claude LLM."""
-    from orchestrator.langgraph.backend_helpers import MAGIC_RC, CELL_GDS, MAGIC_BIN, render_layout_image
+    from orchestrator.langgraph.backend_helpers import (
+        MAGIC_RC,
+        CELL_GDS,
+        MAGIC_BIN,
+        parse_drc_report,
+        render_layout_image,
+    )
 
     block = state["current_block"]
     block_name = block["name"]
@@ -738,6 +744,17 @@ async def drc_node(state: BackendState) -> dict:
         drc_count = result.get("violation_count", 0 if drc_clean else 999)
         gds_path = result.get("gds_path", "")
         spice_path = result.get("spice_path", "")
+        report_path = result.get("report_path") or result.get("drc_report_path") or str(Path(output_dir) / "magic_drc.rpt")
+
+        # The EDA agent occasionally writes contradictory JSON, for example
+        # clean=false with violation_count=0 after Magic produced an empty
+        # DRC report. Trust the tool artifact over the free-form summary.
+        if Path(report_path).exists():
+            parsed_drc = parse_drc_report(report_path)
+            parsed_count = parsed_drc.get("violation_count", -1)
+            if parsed_count >= 0:
+                drc_count = parsed_count
+                drc_clean = bool(parsed_drc.get("clean", False))
 
         span.set_attribute("clean", drc_clean)
         span.set_attribute("violation_count", drc_count)

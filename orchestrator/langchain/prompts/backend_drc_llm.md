@@ -48,6 +48,10 @@ All outputs go in: `{output_dir}/`
 
 5. Write the result JSON to: `{result_json_path}`
 
+If Magic exits successfully, the GDS/SPICE files exist, and the parsed DRC count
+is 0, then `success` and `clean` must both be `true`. Do not report
+`success: false` for a zero-violation run.
+
 ## Result JSON Format
 
 ```json
