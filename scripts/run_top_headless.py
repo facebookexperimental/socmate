@@ -14,9 +14,13 @@ import time
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+CODE_ROOT = Path(__file__).resolve().parents[1]
+if str(CODE_ROOT) not in sys.path:
+    sys.path.insert(0, str(CODE_ROOT))
+
+
+def _project_root() -> Path:
+    return Path(os.environ.get("SOCMATE_PROJECT_ROOT") or Path.cwd()).resolve()
 
 
 def _load_requirements(path: str) -> str:
@@ -32,7 +36,7 @@ def _json_loads(text: str) -> dict:
 
 
 def _write_question_escalation(kind: str, state: dict) -> Path:
-    esc_dir = PROJECT_ROOT / ".socmate" / "escalations"
+    esc_dir = _project_root() / ".socmate" / "escalations"
     esc_dir.mkdir(parents=True, exist_ok=True)
     path = esc_dir / f"{kind}.json"
     answers_path = esc_dir / f"{kind}.answers.json"
@@ -62,7 +66,7 @@ def _recent_text(path: Path, max_lines: int = 160, max_chars: int = 20000) -> st
 
 
 def _recent_context() -> dict:
-    socmate = PROJECT_ROOT / ".socmate"
+    socmate = _project_root() / ".socmate"
     return {
         "pipeline_events_tail": _recent_text(socmate / "pipeline_events.jsonl"),
         "llm_calls_tail": _recent_text(socmate / "llm_calls.jsonl", max_lines=80),
@@ -71,7 +75,7 @@ def _recent_context() -> dict:
 
 
 def _write_decision_escalation(kind: str, state: dict, allowed_actions: list[str]) -> Path:
-    esc_dir = PROJECT_ROOT / ".socmate" / "escalations"
+    esc_dir = _project_root() / ".socmate" / "escalations"
     esc_dir.mkdir(parents=True, exist_ok=True)
     path = esc_dir / f"{kind}.json"
     decision_path = esc_dir / f"{kind}.decision.json"
@@ -124,14 +128,14 @@ def _start_triage_agent(escalation_path: Path) -> None:
     else:
         cmd = [
             sys.executable,
-            str(PROJECT_ROOT / "scripts" / "triage_escalation.py"),
+            str(CODE_ROOT / "scripts" / "triage_escalation.py"),
             "--escalation",
             str(escalation_path),
         ]
 
     env = os.environ.copy()
-    env.setdefault("SOCMATE_PROJECT_ROOT", str(PROJECT_ROOT))
-    env.setdefault("PYTHONPATH", str(PROJECT_ROOT))
+    env.setdefault("SOCMATE_PROJECT_ROOT", str(_project_root()))
+    env.setdefault("PYTHONPATH", str(_project_root()))
     with log_path.open("ab") as log:
         log.write(
             f"\n[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] "
@@ -139,7 +143,7 @@ def _start_triage_agent(escalation_path: Path) -> None:
         )
         subprocess.Popen(
             cmd,
-            cwd=str(PROJECT_ROOT),
+            cwd=str(_project_root()),
             env=env,
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -149,7 +153,7 @@ def _start_triage_agent(escalation_path: Path) -> None:
 
 
 async def _wait_for_question_answers(kind: str, poll_s: float) -> dict:
-    esc_dir = PROJECT_ROOT / ".socmate" / "escalations"
+    esc_dir = _project_root() / ".socmate" / "escalations"
     answers_path = esc_dir / f"{kind}.answers.json"
     print(f"[arch] escalation pending: write answers JSON to {answers_path}", flush=True)
     while True:
@@ -163,7 +167,7 @@ async def _wait_for_question_answers(kind: str, poll_s: float) -> dict:
 
 
 async def _wait_for_decision(kind: str, poll_s: float, escalation_path: Path | None = None) -> dict:
-    esc_dir = PROJECT_ROOT / ".socmate" / "escalations"
+    esc_dir = _project_root() / ".socmate" / "escalations"
     decision_path = esc_dir / f"{kind}.decision.json"
     retry_interval_s = float(os.environ.get("SOCMATE_HEADLESS_TRIAGE_RETRY_S", "600"))
     last_triage_start = 0.0
