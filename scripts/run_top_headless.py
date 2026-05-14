@@ -7,8 +7,6 @@ import argparse
 import asyncio
 import json
 import os
-import shlex
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -102,54 +100,14 @@ def _write_decision_escalation(kind: str, state: dict, allowed_actions: list[str
         },
         "state": state,
         "recent_context": _recent_context(),
-        "triage_prompt": (
-            "Read this escalation plus .socmate OTEL/log artifacts. Decide the "
-            "next action from allowed_actions. Do not rubber-stamp retries: "
-            "classify root cause, cite evidence, and choose the least risky "
-            "next action."
+        "outer_agent_prompt": (
+            "The outer agent must read this escalation plus .socmate OTEL/log "
+            "artifacts, classify the root cause with cited evidence, and "
+            "write an explicit decision JSON. Do not rubber-stamp retries."
         ),
     }
     path.write_text(json.dumps(payload, indent=2) + "\n")
     return path
-
-
-def _triage_agent_enabled() -> bool:
-    value = os.environ.get("SOCMATE_HEADLESS_TRIAGE_AGENT", "0").strip().lower()
-    return value not in {"0", "false", "no", "off", "none"}
-
-
-def _start_triage_agent(escalation_path: Path) -> None:
-    if not _triage_agent_enabled():
-        return
-    log_path = escalation_path.with_suffix(".triage.log")
-    cmd_env = os.environ.get("SOCMATE_HEADLESS_TRIAGE_COMMAND", "").strip()
-    if cmd_env:
-        cmd = shlex.split(cmd_env) + [str(escalation_path)]
-    else:
-        cmd = [
-            sys.executable,
-            str(CODE_ROOT / "scripts" / "triage_escalation.py"),
-            "--escalation",
-            str(escalation_path),
-        ]
-
-    env = os.environ.copy()
-    env.setdefault("SOCMATE_PROJECT_ROOT", str(_project_root()))
-    env.setdefault("PYTHONPATH", str(_project_root()))
-    with log_path.open("ab") as log:
-        log.write(
-            f"\n[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] "
-            f"starting triage command: {' '.join(cmd)}\n".encode()
-        )
-        subprocess.Popen(
-            cmd,
-            cwd=str(_project_root()),
-            env=env,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-    print(f"[headless] started triage agent; log={log_path}", flush=True)
 
 
 async def _wait_for_question_answers(kind: str, poll_s: float) -> dict:
@@ -169,12 +127,9 @@ async def _wait_for_question_answers(kind: str, poll_s: float) -> dict:
 async def _wait_for_decision(kind: str, poll_s: float, escalation_path: Path | None = None) -> dict:
     esc_dir = _project_root() / ".socmate" / "escalations"
     decision_path = esc_dir / f"{kind}.decision.json"
-    retry_interval_s = float(os.environ.get("SOCMATE_HEADLESS_TRIAGE_RETRY_S", "600"))
-    last_triage_start = 0.0
-    if escalation_path and not decision_path.exists():
-        _start_triage_agent(escalation_path)
-        last_triage_start = time.monotonic()
-    print(f"[headless] decision pending: write JSON to {decision_path}", flush=True)
+    if escalation_path:
+        print(f"[headless] escalation written to {escalation_path}", flush=True)
+    print(f"[headless] waiting for outer-agent decision JSON at {decision_path}", flush=True)
     while True:
         if decision_path.exists():
             decision = json.loads(decision_path.read_text())
@@ -184,13 +139,6 @@ async def _wait_for_decision(kind: str, poll_s: float, escalation_path: Path | N
             raise RuntimeError(
                 f"Decision at {decision_path} must be a JSON object with an action"
             )
-        if (
-            escalation_path
-            and _triage_agent_enabled()
-            and time.monotonic() - last_triage_start >= retry_interval_s
-        ):
-            _start_triage_agent(escalation_path)
-            last_triage_start = time.monotonic()
         await asyncio.sleep(max(5.0, poll_s))
 
 
