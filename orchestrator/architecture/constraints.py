@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from pathlib import Path
@@ -283,7 +284,7 @@ async def check_constraints(
         dataflow = ers.get("dataflow", {}) or {}
 
         max_gate_count = _safe_int(area.get("max_gate_count"), 2_000_000)
-        sram_size_kb = _safe_int(dataflow.get("sram_size_kb"), 32)
+        sram_size_kb = _extract_sram_budget_kb(ers, default=32)
         bus_protocol = dataflow.get("bus_protocol", "")
         block_count = len(block_diagram.get("blocks", []))
         max_peripheral_count = min(block_count + 2, 15) if block_count > 8 else 8
@@ -501,6 +502,63 @@ def _safe_int(value: Any, default: int) -> int:
         return int(value)
     except (ValueError, TypeError):
         return default
+
+
+def _walk_text(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        out: list[str] = []
+        for item in value.values():
+            out.extend(_walk_text(item))
+        return out
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            out.extend(_walk_text(item))
+        return out
+    return []
+
+
+def _extract_sram_budget_kb(ers: dict[str, Any], default: int = 32) -> int:
+    """Extract the intended on-chip SRAM budget from PRD/ERS content.
+
+    Older PRD schemas only placed the memory KPI in area/dataflow notes, so
+    falling back to a hard 32 KB budget can create false structural failures
+    for designs whose stated combined activation+KV budget is 64 KB.
+    """
+    dataflow = ers.get("dataflow", {}) or {}
+    area = ers.get("area_budget", {}) or {}
+
+    for key in (
+        "sram_size_kb",
+        "sram_budget_kb",
+        "onchip_sram_budget_kb",
+        "on_chip_sram_budget_kb",
+        "combined_sram_budget_kb",
+    ):
+        if key in dataflow:
+            return _safe_int(dataflow.get(key), default)
+        if key in area:
+            return _safe_int(area.get(key), default)
+
+    text = "\n".join(_walk_text({
+        "dataflow": dataflow,
+        "area_budget": area,
+        "kpis": ers.get("kpis", ers.get("validation_kpis", [])),
+        "requirements": ers.get("requirements", []),
+    }))
+    matches = []
+    for match in re.finditer(
+        r"(?:<=|less than|no greater than|max(?:imum)?|budget|limit|not exceed)"
+        r"[^.\n]{0,80}?(\d+)\s*KB",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        matches.append(int(match.group(1)))
+    if matches:
+        return max(matches)
+    return default
 
 
 def _parse_response(content: str) -> dict[str, Any]:

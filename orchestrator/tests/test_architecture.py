@@ -219,6 +219,20 @@ class TestConstraintChecker:
     """Constraint checker now uses LLM. Tests mock ClaudeLLM to verify
     that the checker correctly forwards violations from the LLM response."""
 
+    def test_extracts_sram_budget_from_prd_kpi_text(self):
+        from orchestrator.architecture.constraints import _extract_sram_budget_kb
+
+        ers = {
+            "dataflow": {
+                "buffering_strategy": "32 KB activation scratchpad plus 16 KB KV cache",
+            },
+            "area_budget": {
+                "notes": "combined activation scratchpad plus KV SRAM must not exceed 64 KB",
+            },
+        }
+
+        assert _extract_sram_budget_kb(ers) == 64
+
     def _mock_llm(self, violations):
         """Return a patch context manager that mocks ClaudeLLM to return violations."""
         from unittest.mock import patch
