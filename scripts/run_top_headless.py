@@ -362,116 +362,119 @@ async def run(args: argparse.Namespace) -> int:
 
     requirements = _load_requirements(args.requirements)
 
-    print("[top] starting architecture", flush=True)
-    result = _json_loads(await mcp.start_architecture(
-        requirements=requirements,
-        target_clock_mhz=args.target_clock_mhz,
-        pdk_config_path=args.pdk_config,
-        max_rounds=args.max_rounds,
-    ))
-    print(json.dumps(result, indent=2), flush=True)
-    if "error" in result:
-        return 1
-
-    last_arch_phase = ""
-    while True:
-        await asyncio.sleep(args.poll_s)
-        await _wait_task(mcp._architecture.task)
-        state = _json_loads(await mcp.get_architecture_state())
-        phase = state.get("phase", "")
-        if phase != last_arch_phase or state.get("human_input_needed"):
-            print("[arch]", json.dumps({
-                "status": state.get("status"),
-                "phase": phase,
-                "blocks": state.get("block_names"),
-                "interrupt": state.get("interrupt_type"),
-                "summary": state.get("interrupt_summary"),
-            }, indent=2), flush=True)
-            last_arch_phase = phase
-
-        if state.get("status") == "error":
-            print(json.dumps(state, indent=2), flush=True)
+    if args.skip_architecture:
+        print("[top] skipping architecture; using existing .socmate artifacts", flush=True)
+    else:
+        print("[top] starting architecture", flush=True)
+        result = _json_loads(await mcp.start_architecture(
+            requirements=requirements,
+            target_clock_mhz=args.target_clock_mhz,
+            pdk_config_path=args.pdk_config,
+            max_rounds=args.max_rounds,
+        ))
+        print(json.dumps(result, indent=2), flush=True)
+        if "error" in result:
             return 1
-        if state.get("success") and state.get("status") == "done":
-            break
-        if state.get("human_input_needed"):
-            itype = state.get("interrupt_type", "")
-            if itype in ("prd_questions", "ers_questions"):
-                if args.auto_answer_questions:
-                    answers = _answer_prd_questions(state, requirements)
-                    print("[arch] auto-answering PRD questions", json.dumps(answers, indent=2), flush=True)
+
+        last_arch_phase = ""
+        while True:
+            await asyncio.sleep(args.poll_s)
+            await _wait_task(mcp._architecture.task)
+            state = _json_loads(await mcp.get_architecture_state())
+            phase = state.get("phase", "")
+            if phase != last_arch_phase or state.get("human_input_needed"):
+                print("[arch]", json.dumps({
+                    "status": state.get("status"),
+                    "phase": phase,
+                    "blocks": state.get("block_names"),
+                    "interrupt": state.get("interrupt_type"),
+                    "summary": state.get("interrupt_summary"),
+                }, indent=2), flush=True)
+                last_arch_phase = phase
+
+            if state.get("status") == "error":
+                print(json.dumps(state, indent=2), flush=True)
+                return 1
+            if state.get("success") and state.get("status") == "done":
+                break
+            if state.get("human_input_needed"):
+                itype = state.get("interrupt_type", "")
+                if itype in ("prd_questions", "ers_questions"):
+                    if args.auto_answer_questions:
+                        answers = _answer_prd_questions(state, requirements)
+                        print("[arch] auto-answering PRD questions", json.dumps(answers, indent=2), flush=True)
+                    else:
+                        path = _write_question_escalation(itype, state)
+                        print(f"[arch] wrote question escalation to {path}", flush=True)
+                        answers = await _wait_for_question_answers(itype, args.poll_s)
+                    print(await mcp.resume_architecture("continue", json.dumps(answers)), flush=True)
+                elif itype == "final_review":
+                    payload_state = {
+                        "phase": state.get("phase"),
+                        "interrupt_type": itype,
+                        "summary": state.get("interrupt_summary"),
+                        "block_names": state.get("block_names"),
+                        "architecture_state": state,
+                    }
+                    path = _write_decision_escalation(
+                        "architecture_final_review", payload_state,
+                        ["accept", "feedback", "abort"],
+                    )
+                    print(f"[arch] wrote final-review escalation to {path}", flush=True)
+                    decision = await _wait_for_decision(
+                        "architecture_final_review", args.poll_s, path
+                    )
+                    print(await mcp.resume_architecture(
+                        decision.get("action", "feedback"),
+                        _decision_feedback(decision),
+                    ), flush=True)
+                elif itype in (
+                    "architecture_review_diagram",
+                    "architecture_review_constraints",
+                    "architecture_review_exhausted",
+                    "architecture_review_needed",
+                ):
+                    payload_state = {
+                        "phase": state.get("phase"),
+                        "interrupt_type": itype,
+                        "summary": state.get("interrupt_summary"),
+                        "block_names": state.get("block_names"),
+                        "architecture_state": state,
+                    }
+                    kind = f"architecture_{itype}"
+                    path = _write_decision_escalation(
+                        kind, payload_state, ["accept", "feedback", "abort"],
+                    )
+                    print(f"[arch] wrote architecture escalation to {path}", flush=True)
+                    decision = await _wait_for_decision(kind, args.poll_s, path)
+                    print(await mcp.resume_architecture(
+                        decision.get("action", "feedback"),
+                        _decision_feedback(decision),
+                    ), flush=True)
                 else:
-                    path = _write_question_escalation(itype, state)
-                    print(f"[arch] wrote question escalation to {path}", flush=True)
-                    answers = await _wait_for_question_answers(itype, args.poll_s)
-                print(await mcp.resume_architecture("continue", json.dumps(answers)), flush=True)
-            elif itype == "final_review":
-                payload_state = {
-                    "phase": state.get("phase"),
-                    "interrupt_type": itype,
-                    "summary": state.get("interrupt_summary"),
-                    "block_names": state.get("block_names"),
-                    "architecture_state": state,
-                }
-                path = _write_decision_escalation(
-                    "architecture_final_review", payload_state,
-                    ["accept", "feedback", "abort"],
-                )
-                print(f"[arch] wrote final-review escalation to {path}", flush=True)
-                decision = await _wait_for_decision(
-                    "architecture_final_review", args.poll_s, path
-                )
-                print(await mcp.resume_architecture(
-                    decision.get("action", "feedback"),
-                    _decision_feedback(decision),
-                ), flush=True)
-            elif itype in (
-                "architecture_review_diagram",
-                "architecture_review_constraints",
-                "architecture_review_exhausted",
-                "architecture_review_needed",
-            ):
-                payload_state = {
-                    "phase": state.get("phase"),
-                    "interrupt_type": itype,
-                    "summary": state.get("interrupt_summary"),
-                    "block_names": state.get("block_names"),
-                    "architecture_state": state,
-                }
-                kind = f"architecture_{itype}"
-                path = _write_decision_escalation(
-                    kind, payload_state, ["accept", "feedback", "abort"],
-                )
-                print(f"[arch] wrote architecture escalation to {path}", flush=True)
-                decision = await _wait_for_decision(kind, args.poll_s, path)
-                print(await mcp.resume_architecture(
-                    decision.get("action", "feedback"),
-                    _decision_feedback(decision),
-                ), flush=True)
-            else:
-                payload_state = {
-                    "phase": state.get("phase"),
-                    "interrupt_type": itype,
-                    "summary": state.get("interrupt_summary"),
-                    "block_names": state.get("block_names"),
-                    "architecture_state": state,
-                }
-                kind = f"architecture_{itype or 'unknown_interrupt'}"
-                path = _write_decision_escalation(
-                    kind, payload_state, ["continue", "feedback", "abort"],
-                )
-                print(f"[arch] wrote unknown-interrupt escalation to {path}", flush=True)
-                decision = await _wait_for_decision(kind, args.poll_s, path)
-                print(await mcp.resume_architecture(
-                    decision.get("action", "continue"),
-                    _decision_feedback(decision),
-                ), flush=True)
+                    payload_state = {
+                        "phase": state.get("phase"),
+                        "interrupt_type": itype,
+                        "summary": state.get("interrupt_summary"),
+                        "block_names": state.get("block_names"),
+                        "architecture_state": state,
+                    }
+                    kind = f"architecture_{itype or 'unknown_interrupt'}"
+                    path = _write_decision_escalation(
+                        kind, payload_state, ["continue", "feedback", "abort"],
+                    )
+                    print(f"[arch] wrote unknown-interrupt escalation to {path}", flush=True)
+                    decision = await _wait_for_decision(kind, args.poll_s, path)
+                    print(await mcp.resume_architecture(
+                        decision.get("action", "continue"),
+                        _decision_feedback(decision),
+                    ), flush=True)
 
     print("[top] architecture complete; starting frontend pipeline from block_specs.json", flush=True)
     result = _json_loads(await mcp.start_pipeline(
         max_attempts=args.max_attempts,
         target_clock_mhz=args.target_clock_mhz,
-        blocks_file="",
+        blocks_file=args.blocks_file,
     ))
     print(json.dumps(result, indent=2), flush=True)
     if "error" in result:
@@ -518,7 +521,7 @@ async def run(args: argparse.Namespace) -> int:
         if (state.get("pipeline_done") or state.get("status") == "done") and not next_nodes:
             print("[top] pipeline finished", flush=True)
             print(json.dumps(state, indent=2), flush=True)
-            return 0
+            break
         if state.get("status") == "interrupted":
             actions = state.get("interrupt_actions") or []
             interrupted = state.get("interrupted_blocks") or []
@@ -551,6 +554,72 @@ async def run(args: argparse.Namespace) -> int:
                 block_actions=json.dumps(block_actions) if block_actions else "",
             ), flush=True)
 
+    if not args.run_backend:
+        return 0
+
+    print("[top] starting backend", flush=True)
+    result = _json_loads(await mcp.start_backend(
+        max_attempts=args.max_attempts,
+        target_clock_mhz=args.target_clock_mhz,
+    ))
+    print(json.dumps(result, indent=2), flush=True)
+    if "error" in result:
+        return 1
+
+    last_backend = None
+    while True:
+        await asyncio.sleep(args.poll_s)
+        await _wait_task(mcp._backend.task)
+        state = _json_loads(await mcp.get_backend_state())
+        digest = (
+            state.get("status"),
+            state.get("current_block"),
+            state.get("phase"),
+            state.get("attempt"),
+            state.get("completed_count"),
+            state.get("backend_done"),
+            tuple(state.get("next_nodes") or []),
+        )
+        if digest != last_backend:
+            print("[backend]", json.dumps({
+                "status": state.get("status"),
+                "current_block": state.get("current_block"),
+                "phase": state.get("phase"),
+                "attempt": state.get("attempt"),
+                "completed": f"{state.get('completed_count')}/{state.get('total_blocks')}",
+                "backend_done": state.get("backend_done"),
+                "next_nodes": state.get("next_nodes") or [],
+            }, indent=2), flush=True)
+            last_backend = digest
+
+        if state.get("status") == "error":
+            print(json.dumps(state, indent=2), flush=True)
+            return 1
+        if state.get("backend_done") or state.get("status") == "done":
+            print("[top] backend finished", flush=True)
+            print(json.dumps(state, indent=2), flush=True)
+            return 0
+        if state.get("status") == "interrupted":
+            payload_state = {
+                "status": state.get("status"),
+                "current_block": state.get("current_block"),
+                "phase": state.get("phase"),
+                "attempt": state.get("attempt"),
+                "previous_error": state.get("previous_error"),
+                "interrupt_payload": state.get("interrupt_payload"),
+                "backend_state": state,
+            }
+            path = _write_decision_escalation(
+                "backend_interrupt", payload_state, ["retry", "skip", "abort"],
+            )
+            print(f"[backend] wrote interrupt escalation to {path}", flush=True)
+            decision = await _wait_for_decision("backend_interrupt", args.poll_s, path)
+            print("[backend] applying decision", decision.get("action"), flush=True)
+            print(await mcp.resume_backend(
+                action=decision.get("action", "retry"),
+                constraint=_decision_feedback(decision),
+            ), flush=True)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -560,6 +629,21 @@ def main() -> None:
     parser.add_argument("--max-rounds", type=int, default=3)
     parser.add_argument("--max-attempts", type=int, default=5)
     parser.add_argument("--poll-s", type=float, default=30.0)
+    parser.add_argument(
+        "--skip-architecture",
+        action="store_true",
+        help="Start from existing .socmate architecture artifacts and run frontend only.",
+    )
+    parser.add_argument(
+        "--blocks-file",
+        default="",
+        help="Optional blocks.yaml path for frontend. Empty uses .socmate/block_specs.json.",
+    )
+    parser.add_argument(
+        "--run-backend",
+        action="store_true",
+        help="Run backend after frontend completes.",
+    )
     parser.add_argument(
         "--auto-answer-questions",
         action="store_true",
