@@ -48,6 +48,60 @@ def _write_question_escalation(kind: str, state: dict) -> Path:
     return path
 
 
+def _recent_text(path: Path, max_lines: int = 160, max_chars: int = 20000) -> str:
+    if not path.exists():
+        return ""
+    try:
+        lines = path.read_text(errors="replace").splitlines()[-max_lines:]
+    except Exception as exc:
+        return f"<failed to read {path}: {exc}>"
+    text = "\n".join(lines)
+    return text[-max_chars:]
+
+
+def _recent_context() -> dict:
+    socmate = PROJECT_ROOT / ".socmate"
+    return {
+        "pipeline_events_tail": _recent_text(socmate / "pipeline_events.jsonl"),
+        "llm_calls_tail": _recent_text(socmate / "llm_calls.jsonl", max_lines=80),
+        "run_log_tail": _recent_text(Path(os.environ.get("SOCMATE_RUN_LOG", "")), max_lines=240),
+    }
+
+
+def _write_decision_escalation(kind: str, state: dict, allowed_actions: list[str]) -> Path:
+    esc_dir = PROJECT_ROOT / ".socmate" / "escalations"
+    esc_dir.mkdir(parents=True, exist_ok=True)
+    path = esc_dir / f"{kind}.json"
+    decision_path = esc_dir / f"{kind}.decision.json"
+    payload = {
+        "type": kind,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "allowed_actions": allowed_actions,
+        "decision_file": str(decision_path),
+        "decision_schema": {
+            "architecture": {
+                "action": "accept | feedback | continue | abort",
+                "feedback": "required for feedback; optional otherwise",
+            },
+            "pipeline": {
+                "action": "approve | retry | skip | abort | fix_rtl | fix_tb",
+                "block_actions": "optional object mapping block_name to action",
+                "rationale": "required human/triage-agent rationale",
+            },
+        },
+        "state": state,
+        "recent_context": _recent_context(),
+        "triage_prompt": (
+            "Read this escalation plus .socmate OTEL/log artifacts. Decide the "
+            "next action from allowed_actions. Do not rubber-stamp retries: "
+            "classify root cause, cite evidence, and choose the least risky "
+            "next action."
+        ),
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    return path
+
+
 async def _wait_for_question_answers(kind: str, poll_s: float) -> dict:
     esc_dir = PROJECT_ROOT / ".socmate" / "escalations"
     answers_path = esc_dir / f"{kind}.answers.json"
@@ -59,6 +113,22 @@ async def _wait_for_question_answers(kind: str, poll_s: float) -> dict:
                 print(f"[arch] loaded escalation answers from {answers_path}", flush=True)
                 return answers
             raise RuntimeError(f"Escalation answers at {answers_path} must be a JSON object")
+        await asyncio.sleep(max(5.0, poll_s))
+
+
+async def _wait_for_decision(kind: str, poll_s: float) -> dict:
+    esc_dir = PROJECT_ROOT / ".socmate" / "escalations"
+    decision_path = esc_dir / f"{kind}.decision.json"
+    print(f"[headless] decision pending: write JSON to {decision_path}", flush=True)
+    while True:
+        if decision_path.exists():
+            decision = json.loads(decision_path.read_text())
+            if isinstance(decision, dict) and decision.get("action"):
+                print(f"[headless] loaded decision from {decision_path}", flush=True)
+                return decision
+            raise RuntimeError(
+                f"Decision at {decision_path} must be a JSON object with an action"
+            )
         await asyncio.sleep(max(5.0, poll_s))
 
 
@@ -238,19 +308,64 @@ async def run(args: argparse.Namespace) -> int:
                     answers = await _wait_for_question_answers(itype, args.poll_s)
                 print(await mcp.resume_architecture("continue", json.dumps(answers)), flush=True)
             elif itype == "final_review":
-                print("[arch] auto-approving final review", flush=True)
-                print(await mcp.resume_architecture("accept"), flush=True)
+                payload_state = {
+                    "phase": state.get("phase"),
+                    "interrupt_type": itype,
+                    "summary": state.get("interrupt_summary"),
+                    "block_names": state.get("block_names"),
+                    "architecture_state": state,
+                }
+                path = _write_decision_escalation(
+                    "architecture_final_review", payload_state,
+                    ["accept", "feedback", "abort"],
+                )
+                print(f"[arch] wrote final-review escalation to {path}", flush=True)
+                decision = await _wait_for_decision("architecture_final_review", args.poll_s)
+                print(await mcp.resume_architecture(
+                    decision.get("action", "feedback"),
+                    decision.get("feedback", ""),
+                ), flush=True)
             elif itype in (
                 "architecture_review_diagram",
                 "architecture_review_constraints",
                 "architecture_review_exhausted",
                 "architecture_review_needed",
             ):
-                print("[arch] accepting architecture interrupt", flush=True)
-                print(await mcp.resume_architecture("accept"), flush=True)
+                payload_state = {
+                    "phase": state.get("phase"),
+                    "interrupt_type": itype,
+                    "summary": state.get("interrupt_summary"),
+                    "block_names": state.get("block_names"),
+                    "architecture_state": state,
+                }
+                kind = f"architecture_{itype}"
+                path = _write_decision_escalation(
+                    kind, payload_state, ["accept", "feedback", "abort"],
+                )
+                print(f"[arch] wrote architecture escalation to {path}", flush=True)
+                decision = await _wait_for_decision(kind, args.poll_s)
+                print(await mcp.resume_architecture(
+                    decision.get("action", "feedback"),
+                    decision.get("feedback", ""),
+                ), flush=True)
             else:
-                print("[arch] continuing unknown interrupt", itype, flush=True)
-                print(await mcp.resume_architecture("continue"), flush=True)
+                payload_state = {
+                    "phase": state.get("phase"),
+                    "interrupt_type": itype,
+                    "summary": state.get("interrupt_summary"),
+                    "block_names": state.get("block_names"),
+                    "architecture_state": state,
+                }
+                kind = f"architecture_{itype or 'unknown_interrupt'}"
+                path = _write_decision_escalation(
+                    kind, payload_state, ["continue", "feedback", "abort"],
+                )
+                print(f"[arch] wrote unknown-interrupt escalation to {path}", flush=True)
+                decision = await _wait_for_decision(kind, args.poll_s)
+                print(await mcp.resume_architecture(
+                    decision.get("action", "continue"),
+                    decision.get("feedback", ""),
+                ), flush=True)
 
     print("[top] architecture complete; starting frontend pipeline from block_specs.json", flush=True)
     result = _json_loads(await mcp.start_pipeline(
@@ -307,23 +422,30 @@ async def run(args: argparse.Namespace) -> int:
         if state.get("status") == "interrupted":
             actions = state.get("interrupt_actions") or []
             interrupted = state.get("interrupted_blocks") or []
-            block_actions = {}
             for item in interrupted:
                 block = item.get("block_name", "")
                 retry_counts[block] = retry_counts.get(block, 0) + 1
-                if "retry" in actions and retry_counts[block] <= 3:
-                    block_actions[block] = "retry"
-                elif "skip" in actions:
-                    block_actions[block] = "skip"
-            if "approve" in actions:
-                action = "approve"
-            elif "retry" in actions:
-                action = "retry"
-            elif "skip" in actions:
-                action = "skip"
-            else:
-                action = actions[0] if actions else "retry"
-            print("[pipeline] auto-resuming", action, block_actions, flush=True)
+            payload_state = {
+                "status": state.get("status"),
+                "completed_count": state.get("completed_count"),
+                "total_blocks": state.get("total_blocks"),
+                "current_tier": state.get("current_tier"),
+                "interrupt_type": state.get("interrupt_type"),
+                "interrupt_actions": actions,
+                "pending_interrupt_count": state.get("pending_interrupt_count"),
+                "interrupted_blocks": interrupted,
+                "retry_counts_seen_by_runner": retry_counts,
+                "pipeline_state": state,
+            }
+            path = _write_decision_escalation(
+                "pipeline_interrupt", payload_state,
+                actions or ["retry", "abort"],
+            )
+            print(f"[pipeline] wrote interrupt escalation to {path}", flush=True)
+            decision = await _wait_for_decision("pipeline_interrupt", args.poll_s)
+            action = decision.get("action")
+            block_actions = decision.get("block_actions") or {}
+            print("[pipeline] applying decision", action, block_actions, flush=True)
             print(await mcp.resume_pipeline(
                 action=action,
                 block_actions=json.dumps(block_actions) if block_actions else "",
