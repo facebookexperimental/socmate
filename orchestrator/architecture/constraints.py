@@ -258,6 +258,11 @@ async def check_constraints(
         bus_protocol = dataflow.get("bus_protocol", "")
         block_count = len(block_diagram.get("blocks", []))
         max_peripheral_count = min(block_count + 2, 15) if block_count > 8 else 8
+        memory_map_enabled = bool((memory_map.get("result", memory_map) or {}).get("peripherals"))
+        clock_tree_enabled = bool((clock_tree.get("result", clock_tree) or {}).get("domains"))
+        register_spec_enabled = bool(
+            (register_spec.get("result", register_spec) or {}).get("register_blocks")
+        )
 
         # Build gate budget rationale
         die_area = area.get("max_die_area_mm2")
@@ -309,16 +314,39 @@ async def check_constraints(
                 "(Skipped -- this design has fewer than 3 blocks or no bus protocol.)"
             )
 
+        optional_stage_note = (
+            "OPTIONAL STAGE NOTE:\n"
+            "- Memory-map checks are disabled for this run unless a non-empty "
+            "memory map is present.\n"
+            "- Clock-domain and CDC checks are disabled for this run unless a "
+            "non-empty clock tree is present.\n"
+            "- Register-spec consistency checks are disabled for this run unless "
+            "a non-empty register spec is present.\n\n"
+        )
+
         additional_rules = (
+            optional_stage_note +
             "ADDITIONAL CONSTRAINT RULES:\n\n"
-            "4. CLOCK DOMAIN CROSSINGS: If the clock tree has multiple domains, every\n"
-            "   connection between blocks in different domains MUST have a CDC module.\n"
-            "   Missing CDC is \"auto_fixable\" severity \"error\".\n\n"
+            + (
+                "4. CLOCK DOMAIN CROSSINGS: If the clock tree has multiple domains, every\n"
+                "   connection between blocks in different domains MUST have a CDC module.\n"
+                "   Missing CDC is \"auto_fixable\" severity \"error\".\n\n"
+                if clock_tree_enabled
+                else "4. CLOCK DOMAIN CROSSINGS: skipped because clock-tree generation is disabled.\n\n"
+            ) +
             f"5. GATE BUDGET: Total estimated gates must not exceed {max_gate_count:,}\n"
             f"   ({gate_budget_rationale}). If exceeded, flag as \"auto_fixable\" severity \"error\".\n\n"
             "ADDITIONAL REVIEW (go beyond the rules above):\n"
-            "7. Check that register spec blocks match memory map peripherals.\n"
-            "8. Check that all blocks in the block diagram appear in exactly one clock domain.\n"
+            + (
+                "7. Check that register spec blocks match memory map peripherals.\n"
+                if register_spec_enabled and memory_map_enabled
+                else "7. Register/memory-map consistency skipped because one or both optional artifacts are disabled.\n"
+            ) +
+            (
+                "8. Check that all blocks in the block diagram appear in exactly one clock domain.\n"
+                if clock_tree_enabled
+                else "8. Per-block clock-domain membership skipped because clock-tree generation is disabled.\n"
+            ) +
             "9. Check for data width mismatches in connections (source width != dest width\n"
             "   without an adapter block).\n"
             "10. Check that tier assignments are reasonable (e.g., an FFT should not be tier 1).\n\n"

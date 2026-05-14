@@ -90,6 +90,18 @@ def _stage_enabled(enable_env: str, legacy_skip_env: str = "") -> bool:
     }
 
 
+def _optional_stage_payload(value: dict | None) -> dict:
+    """Return optional architecture artifact only when the stage actually ran."""
+    if not isinstance(value, dict):
+        return {}
+    if value.get("skipped") is True:
+        return {}
+    result = value.get("result")
+    if isinstance(result, dict) and result.get("skipped") is True:
+        return {}
+    return value
+
+
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
@@ -954,7 +966,8 @@ async def memory_map_node(state: ArchGraphState) -> dict:
     """
     if not _stage_enabled("SOCMATE_ENABLE_MEMORY_MAP", "SOCMATE_SKIP_MEMORY_MAP"):
         _event(state, "Memory Map", "graph_node_enter", {"round": state["round"], "skipped": True})
-        empty = {"result": {"peripheral_count": 0, "peripherals": []},
+        empty = {"skipped": True,
+                 "result": {"skipped": True, "peripheral_count": 0, "peripherals": []},
                  "rationale": "bypassed by default; set SOCMATE_ENABLE_MEMORY_MAP=1 to run"}
         _event(state, "Memory Map", "graph_node_exit", {"round": state["round"], "skipped": True})
         update = {"memory_map": empty, "phase": "memory_map"}
@@ -999,7 +1012,8 @@ async def clock_tree_node(state: ArchGraphState) -> dict:
     """
     if not _stage_enabled("SOCMATE_ENABLE_CLOCK_TREE", "SOCMATE_SKIP_CLOCK_TREE"):
         _event(state, "Clock Tree", "graph_node_enter", {"round": state["round"], "skipped": True})
-        empty = {"result": {"num_domains": 1, "domains": []},
+        empty = {"skipped": True,
+                 "result": {"skipped": True, "num_domains": 0, "domains": []},
                  "rationale": "bypassed by default; set SOCMATE_ENABLE_CLOCK_TREE=1 to run"}
         _event(state, "Clock Tree", "graph_node_exit", {"round": state["round"], "skipped": True})
         update = {"clock_tree": empty, "phase": "clock_tree"}
@@ -1044,7 +1058,8 @@ async def register_spec_node(state: ArchGraphState) -> dict:
     """
     if not _stage_enabled("SOCMATE_ENABLE_REGISTER_SPEC", "SOCMATE_SKIP_REGISTER_SPEC"):
         _event(state, "Register Spec", "graph_node_enter", {"round": state["round"], "skipped": True})
-        empty = {"result": {"total_blocks": 0, "register_blocks": []},
+        empty = {"skipped": True,
+                 "result": {"skipped": True, "total_blocks": 0, "register_blocks": []},
                  "rationale": "bypassed by default; set SOCMATE_ENABLE_REGISTER_SPEC=1 to run"}
         _event(state, "Register Spec", "graph_node_exit", {"round": state["round"], "skipped": True})
         update = {"register_spec": empty, "phase": "register_spec"}
@@ -1094,9 +1109,9 @@ async def constraint_check_node(state: ArchGraphState) -> dict:
     with _tracer.start_as_current_span(f"Constraint Check{round_label}") as span:
         span.set_attribute("round", state["round"])
 
-        mm = state.get("memory_map", {})
-        ct = state.get("clock_tree", {})
-        rs = state.get("register_spec", {})
+        mm = _optional_stage_payload(state.get("memory_map"))
+        ct = _optional_stage_payload(state.get("clock_tree"))
+        rs = _optional_stage_payload(state.get("register_spec"))
 
         violations = await check_constraints(
             block_diagram=state["block_diagram"],
