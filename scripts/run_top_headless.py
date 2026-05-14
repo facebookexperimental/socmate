@@ -231,6 +231,17 @@ def _answer_prd_questions(state: dict, requirements: str = "") -> dict:
         "weight storage beyond a prefetched tile plus metadata."
     )
 
+    def _needs_default(value: object) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return True
+        lowered = text.lower()
+        if lowered in {"n/a", "na", "none", "unknown", "tbd", "todo", "not specified"}:
+            return True
+        if lowered in {"n", "exact fixed-token sequence for n decoded tokens"}:
+            return True
+        return False
+
     def _maybe_answer_freeform_kpi(item: dict) -> None:
         qid = item.get("id")
         if not qid or qid in answers:
@@ -293,12 +304,15 @@ def _answer_prd_questions(state: dict, requirements: str = "") -> dict:
     }
     transformer_defaults = {
         "primary_model_shape": "llama2.c TinyStories 260K-class: d_model=64, n_layers=5, n_heads=4, n_kv_heads=4, vocab_size=32000, max_seq_len=64, hidden_dim=172",
+        "primary_model_dimensions": "llama2.c TinyStories 260K-class: d_model=64, n_layers=5, n_heads=4, n_kv_heads=4, vocab_size=32000, max_seq_len=64, hidden_dim=172",
         "flagship_model_shape": "llama2.c TinyStories 260K-class: d_model=64, n_layers=5, n_heads=4, n_kv_heads=4, vocab_size=32000, max_seq_len=64, hidden_dim=172",
         "exact_model_manifest": "Use a fixed synthetic 260K-class llama2.c manifest with d_model=64, n_layers=5, n_heads=4, n_kv_heads=4, hidden_dim=172, vocab_size=32000, max_seq_len=64; validation vectors may be generated from this manifest.",
         "fixed_point_formats": "INT4 weights are signed symmetric Q0.3, INT8 activations are signed Q3.4, RMSNorm/RoPE/SiLU LUT outputs are Q1.15, softmax probabilities are Q0.15, accumulators are INT32 with documented right-shift requantization.",
         "qspi_timing_parameters": "QSPI SDR at 50 MHz, 4 data lines, 8-bit command, 24-bit address, 8 dummy cycles, 256-byte bursts; use 15 MB/s sustained effective bandwidth for KPI accounting.",
         "flash_clock_and_protocol": "QSPI SDR at 50 MHz with 8-bit command, 24-bit address, 8 dummy cycles, 256-byte bursts, valid/ready backpressure, and underrun counters.",
         "end_to_end_decode_kpi": "Decode exactly 8 tokens from a fixed prompt and fixed synthetic model; every emitted token ID must match the golden reference.",
+        "model_kpi_token_output": "Decode exactly 8 tokens from a fixed prompt and fixed synthetic model; every emitted token ID must match the golden reference.",
+        "kpi_end_to_end_decode": "Decode exactly 8 tokens from a fixed prompt and fixed synthetic model; every emitted token ID must match the golden reference.",
         "decoded_token_count_kpi": "8 tokens",
         "end_to_end_token_count": "8 tokens",
         "bus_protocol": "Wishbone-compatible host control plus valid/ready tensor streams",
@@ -318,7 +332,8 @@ def _answer_prd_questions(state: dict, requirements: str = "") -> dict:
     elif is_codec:
         defaults.update(codec_defaults)
     for key, value in defaults.items():
-        answers.setdefault(key, value)
+        if key not in answers or _needs_default(answers[key]):
+            answers[key] = value
 
     return answers
 

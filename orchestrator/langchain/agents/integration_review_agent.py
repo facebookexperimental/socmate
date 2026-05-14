@@ -42,6 +42,49 @@ _JSON_BLOCK_RE = re.compile(
 )
 
 
+def _endpoint_block(endpoint: Any) -> str | None:
+    if endpoint is None:
+        return None
+    text = str(endpoint)
+    if "." in text:
+        return text.split(".", 1)[0]
+    return text or None
+
+
+def _filter_connections_for_blocks(
+    block_diagram: dict[str, Any],
+    block_names: list[str],
+) -> tuple[dict[str, Any], int]:
+    """Return a copy containing only connections fully inside block_names.
+
+    The pipeline reviews one tier at a time. Architecture diagrams can contain
+    edges to later-tier blocks whose uArch specs have not been generated yet;
+    those edges are not actionable during the current tier review.
+    """
+    review_blocks = set(block_names)
+    filtered = dict(block_diagram)
+    filtered_blocks = []
+    for block in block_diagram.get("blocks", []):
+        if not isinstance(block, dict) or block.get("name") in review_blocks:
+            filtered_blocks.append(block)
+    filtered["blocks"] = filtered_blocks
+
+    kept = []
+    deferred = 0
+    for conn in block_diagram.get("connections", []):
+        if not isinstance(conn, dict):
+            kept.append(conn)
+            continue
+        src = _endpoint_block(conn.get("from") or conn.get("source") or conn.get("src"))
+        dst = _endpoint_block(conn.get("to") or conn.get("dest") or conn.get("destination"))
+        if src in review_blocks and dst in review_blocks:
+            kept.append(conn)
+        else:
+            deferred += 1
+    filtered["connections"] = kept
+    return filtered, deferred
+
+
 def _parse_issue_counts(summary: str) -> tuple[int, int]:
     """Extract issues_found / issues_fixed from the LLM's JSON summary block.
 
@@ -93,6 +136,20 @@ class IntegrationReviewAgent:
                 if p.exists():
                     spec_paths.append(str(p))
 
+            bd_path = root / ".socmate" / "block_diagram.json"
+            review_bd_path = bd_path
+            deferred_connection_count = 0
+            if bd_path.exists():
+                try:
+                    block_diagram = json.loads(bd_path.read_text())
+                    filtered, deferred_connection_count = _filter_connections_for_blocks(
+                        block_diagram, block_names
+                    )
+                    review_bd_path = root / ".socmate" / "integration_review_block_diagram.json"
+                    review_bd_path.write_text(json.dumps(filtered, indent=2))
+                except (json.JSONDecodeError, OSError, TypeError):
+                    review_bd_path = bd_path
+
             parts = [
                 "Review the following uArch specs for cross-block interface coherence.",
                 "",
@@ -104,7 +161,13 @@ class IntegrationReviewAgent:
 
             parts.append("")
             parts.append("## Architecture Files")
-            parts.append(f"- Block diagram connections: {root / '.socmate' / 'block_diagram.json'}")
+            parts.append(f"- Current-tier block diagram connections: {review_bd_path}")
+            if deferred_connection_count:
+                parts.append(
+                    f"- Deferred cross-tier/future-tier connections: {deferred_connection_count}. "
+                    "Do not count these as current-tier issues because the connected "
+                    "uArch specs do not exist yet."
+                )
 
             ers_path = root / "arch" / "ers_spec.md"
             if ers_path.exists():
@@ -125,10 +188,11 @@ class IntegrationReviewAgent:
 
             parts.append("")
             parts.append(
-                "Check every connection in the block diagram. For each, verify "
+                "Check every connection in the current-tier block diagram. For each, verify "
                 "port widths, directions, protocols, and clock/reset naming match "
-                "across connected blocks. If you find mismatches, edit the uArch "
-                "spec files on disk to fix them. Report a summary of findings."
+                "across connected blocks. Do not report missing ports or missing specs "
+                "for deferred cross-tier/future-tier connections. If you find mismatches, "
+                "edit the uArch spec files on disk to fix them. Report a summary of findings."
             )
 
             user_message = "\n".join(parts)

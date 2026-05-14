@@ -1567,3 +1567,32 @@ class TestParseIssueCounts:
     def test_negative_values_clamped(self):
         text = '```json\n{"issues_found": -1, "issues_fixed": -5}\n```'
         assert self._parse(text) == (0, 0)
+
+
+class TestIntegrationReviewFiltering:
+    def test_filters_future_tier_connections(self):
+        from orchestrator.langchain.agents.integration_review_agent import (
+            _filter_connections_for_blocks,
+        )
+
+        diagram = {
+            "blocks": [
+                {"name": "a", "tier": 1},
+                {"name": "b", "tier": 1},
+                {"name": "future", "tier": 2},
+            ],
+            "connections": [
+                {"from": "a.out", "to": "b.in"},
+                {"from": "b.out", "to": "future.in"},
+                {"from": "future.out", "to": "a.in"},
+            ],
+        }
+
+        filtered, deferred = _filter_connections_for_blocks(diagram, ["a", "b"])
+
+        assert deferred == 2
+        assert filtered["blocks"] == [
+            {"name": "a", "tier": 1},
+            {"name": "b", "tier": 1},
+        ]
+        assert filtered["connections"] == [{"from": "a.out", "to": "b.in"}]
