@@ -483,6 +483,45 @@ class TestRouteAfterIntegrationReview:
     def test_default_is_approve(self):
         assert route_after_integration_review({}) == "advance_tier"
 
+    @pytest.mark.asyncio
+    async def test_clean_revise_response_is_forced_to_approve(self, tmp_path, monkeypatch):
+        from orchestrator.langchain.agents import integration_review_agent
+
+        def fake_init(self, *args, **kwargs):
+            pass
+
+        async def fake_review(self, block_names, project_root):
+            return {
+                "summary": "No current-tier integration issues found.",
+                "issues_found": 0,
+                "issues_fixed": 0,
+            }
+
+        monkeypatch.setattr(
+            integration_review_agent.IntegrationReviewAgent,
+            "__init__",
+            fake_init,
+        )
+        monkeypatch.setattr(
+            integration_review_agent.IntegrationReviewAgent,
+            "review",
+            fake_review,
+        )
+        monkeypatch.setattr(
+            pipeline_graph,
+            "interrupt",
+            lambda payload: {"action": "revise"},
+        )
+
+        result = await pipeline_graph.integration_review_node({
+            "project_root": str(tmp_path),
+            "block_queue": [{"name": "adder32", "tier": 1}],
+            "tier_list": [1],
+            "current_tier_index": 0,
+        })
+
+        assert result["integration_review_action"] == "approve"
+
 
 # ---------------------------------------------------------------------------
 # Internal nodes (unit tests)

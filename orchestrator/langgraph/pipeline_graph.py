@@ -1853,6 +1853,13 @@ async def integration_review_node(state: OrchestratorState) -> dict:
 
     response = interrupt(payload)
     action = response.get("action", "abort")
+    if action == "revise" and issues_found == 0:
+        log(
+            "  [INTEGRATION REVIEW] Clean review returned revise; "
+            "treating as approve",
+            YELLOW,
+        )
+        action = "approve"
 
     write_graph_event(pr, "Integration Review", "graph_node_exit", {
         "action": action, "issues_found": issues_found,
