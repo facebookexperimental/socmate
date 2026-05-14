@@ -2833,6 +2833,7 @@ async def validation_dv_node(state: OrchestratorState) -> dict:
                 "passed": False,
                 "error": msg,
                 "phase": "preflight",
+                "aborted": True,
             }}
 
         if len(block_rtl_paths) < 1:
@@ -2842,6 +2843,7 @@ async def validation_dv_node(state: OrchestratorState) -> dict:
                 "passed": False,
                 "error": msg,
                 "phase": "preflight",
+                "aborted": True,
             }}
 
         ers_context, requirement_count = _load_ers_validation_context(pr)
@@ -2852,6 +2854,7 @@ async def validation_dv_node(state: OrchestratorState) -> dict:
                 "passed": False,
                 "error": msg,
                 "phase": "missing_ers",
+                "aborted": True,
             }}
 
         connections, _ = await asyncio.to_thread(load_architecture_connections, pr)
@@ -2874,15 +2877,85 @@ async def validation_dv_node(state: OrchestratorState) -> dict:
             )
         except Exception as e:
             log(f"  [VALIDATION-DV] Testbench generation failed: {e}", RED)
+            error_msg = f"Validation testbench generation failed: {e}"
+            contract_audit = await _run_top_level_contract_audit(
+                stage="validation_dv_generation",
+                project_root=pr,
+                design_name=design_name,
+                top_rtl_path=top_rtl_path,
+                testbench_path="",
+                test_count=0,
+                requirement_count=requirement_count,
+                sim_log=error_msg,
+                sim_log_path="",
+                block_rtl_paths=block_rtl_paths,
+            )
+            payload = {
+                "type": "validation_dv_failure",
+                "phase": "tb_generation",
+                "design_name": design_name,
+                "top_rtl_path": top_rtl_path,
+                "testbench_path": "",
+                "test_count": 0,
+                "requirement_count": requirement_count,
+                "sim_log": error_msg,
+                "sim_log_path": "",
+                "block_rtl_paths": block_rtl_paths,
+                "contract_audit": contract_audit,
+                "contract_audit_path": contract_audit.get("audit_path", ""),
+                "supported_actions": [
+                    "retry",
+                    "fix_rtl",
+                    "fix_tb",
+                    "abort",
+                ],
+                "outer_agent_guidance": (
+                    "Validation DV could not generate a usable cocotb "
+                    "testbench for the measurable ERS/KPI requirements. "
+                    "Diagnose whether the failure is missing ERS/KPI detail, "
+                    "an invalid top-level contract, or a validation testbench "
+                    "generation bug. Use action='fix_tb' when the validation "
+                    "testbench prompt/generator needs repair, action='fix_rtl' "
+                    "when RTL/top contracts must change, or action='retry' "
+                    "after applying an external fix. Do not mark the pipeline "
+                    "complete until Validation DV runs and verifies every ERS "
+                    "requirement.\n\nContract audit result: "
+                    f"{contract_audit.get('category', 'UNKNOWN')} -- "
+                    f"{contract_audit.get('outer_agent_summary', '')}"
+                ),
+                "reference_files": {
+                    "top_rtl": top_rtl_path,
+                    "ers": str(Path(pr) / ".socmate" / "ers_spec.json"),
+                    "contract_audit": contract_audit.get("audit_path", ""),
+                },
+            }
+            response = interrupt(payload)
+            action = response.get("action", "abort")
             write_graph_event(pr, "Validation DV", "graph_node_exit", {
-                "error": str(e), "phase": "tb_generation",
+                "error": str(e),
+                "phase": "tb_generation",
+                "action": action,
             })
-            return {"validation_dv_result": {
+            dv_result = {
                 "passed": False,
-                "error": f"Validation testbench generation failed: {e}",
+                "error": error_msg,
                 "phase": "tb_generation",
                 "requirement_count": requirement_count,
-            }}
+                "test_count": 0,
+                "testbench_path": "",
+                "design_name": design_name,
+                "action_taken": action,
+                "contract_audit": contract_audit,
+                "contract_audit_path": contract_audit.get("audit_path", ""),
+            }
+            if action == "abort":
+                dv_result["aborted"] = True
+                log("  [VALIDATION-DV] Aborted", RED)
+            elif action in ("retry", "fix_rtl", "fix_tb"):
+                fix_desc = response.get("rtl_fix_description", "")
+                dv_result["fix_applied"] = fix_desc
+                log(f"  [VALIDATION-DV] Fix applied: {fix_desc}", GREEN)
+            return {"validation_dv_result": dv_result}
 
         tb_path = tb_result.get("testbench_path", "")
         test_count = tb_result.get("test_count", 0)
