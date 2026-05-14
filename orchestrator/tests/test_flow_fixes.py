@@ -816,6 +816,33 @@ class TestBestResultPersistence:
         assert not best_path.exists()
 
 
+class TestCocotbResultParsing:
+    def test_failing_summary_overrides_zero_returncode(self):
+        from orchestrator.langgraph.pipeline_helpers import _parse_cocotb_summary
+
+        summary = _parse_cocotb_summary(
+            "** TESTS=6 PASS=0 FAIL=6 SKIP=0 **"
+        )
+
+        assert summary["found"] is True
+        assert summary["tests_total"] == 6
+        assert summary["tests_passed"] == 0
+        assert summary["tests_failed"] == 6
+
+    def test_normalizes_unit_keyword_for_installed_cocotb(self, tmp_path, monkeypatch):
+        from orchestrator.langgraph import pipeline_helpers
+
+        tb_file = tmp_path / "test_unit.py"
+        tb_file.write_text('await Timer(1, unit="ns")\nClock(dut.clk, 10, unit="ns")\n')
+
+        monkeypatch.setattr(pipeline_helpers, "_cocotb_uses_plural_units", lambda: True)
+        pipeline_helpers._normalize_cocotb_timing_keywords(tb_file)
+
+        content = tb_file.read_text()
+        assert 'units="ns"' in content
+        assert 'unit="ns"' not in content
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # P4-3: Auto-Approve uArch Spec at Per-Block Level
 # ═══════════════════════════════════════════════════════════════════════════

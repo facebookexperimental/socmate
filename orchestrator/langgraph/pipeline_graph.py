@@ -680,6 +680,7 @@ _TB_BUG_PATTERNS = [
     "cocotb.result.SimFailure",
     "start_fork",                       # removed in cocotb 2.0
     "units=",                           # cocotb 2.0 wants unit= (singular)
+    "unexpected keyword argument 'unit'",
     # Compile-time port/signal mismatches
     "Cannot find signal",
     "No such signal",

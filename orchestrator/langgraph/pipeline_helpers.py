@@ -23,8 +23,10 @@ Provides:
 from __future__ import annotations
 
 from orchestrator._timeouts import scaled
+import inspect
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -610,6 +612,49 @@ with VcdReader(str(vcd_path)) as reader:
     audit_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
 
+_COCOTB_SUMMARY_RE = re.compile(
+    r"TESTS=(?P<tests>\d+)\s+PASS=(?P<passed>\d+)\s+FAIL=(?P<failed>\d+)",
+    re.IGNORECASE,
+)
+
+
+def _parse_cocotb_summary(output: str) -> dict:
+    """Extract cocotb regression counts from stdout/stderr."""
+    matches = list(_COCOTB_SUMMARY_RE.finditer(output or ""))
+    if not matches:
+        return {"found": False, "tests_total": 0, "tests_passed": 0, "tests_failed": 0}
+    match = matches[-1]
+    return {
+        "found": True,
+        "tests_total": int(match.group("tests")),
+        "tests_passed": int(match.group("passed")),
+        "tests_failed": int(match.group("failed")),
+    }
+
+
+def _cocotb_uses_plural_units() -> bool:
+    try:
+        from cocotb.triggers import Timer
+
+        return "units" in inspect.signature(Timer).parameters
+    except Exception:
+        return False
+
+
+def _normalize_cocotb_timing_keywords(tb_file: Path) -> None:
+    """Make generated cocotb timing calls match the installed cocotb API."""
+    try:
+        text = tb_file.read_text(encoding="utf-8")
+    except OSError:
+        return
+    if _cocotb_uses_plural_units():
+        normalized = re.sub(r"(?<!\w)unit\s*=", "units=", text)
+    else:
+        normalized = re.sub(r"(?<!\w)units\s*=", "unit=", text)
+    if normalized != text:
+        tb_file.write_text(normalized, encoding="utf-8")
+
+
 def run_simulation(block: dict, rtl_path: str, tb_path: str, attempt: int = 1) -> dict:
     """Run cocotb simulation with Verilator."""
     block_name = block["name"]
@@ -628,7 +673,9 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
 """
     (sim_dir / "Makefile").write_text(makefile_content)
 
-    shutil.copy2(tb_path, sim_dir / f"test_{block_name}.py")
+    sim_tb_path = sim_dir / f"test_{block_name}.py"
+    shutil.copy2(tb_path, sim_tb_path)
+    _normalize_cocotb_timing_keywords(sim_tb_path)
 
     create_golden_model_wrapper(block_name, block.get("python_source", ""))
 
@@ -654,18 +701,32 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
             env=env,
         )
         log_path = _write_step_log(block_name, "simulate", [make_bin, "-C", str(sim_dir)], result, attempt)
-        output = (result.stdout + "\n" + result.stderr)[-5000:]
+        full_output = result.stdout + "\n" + result.stderr
+        output = full_output[-5000:]
         no_tests = "No tests were discovered" in output
+        summary = _parse_cocotb_summary(full_output)
         if no_tests:
             output = (
                 "COCOTB ERROR: No tests were discovered. Treating simulation "
                 "as failed to prevent DV false pass.\n" + output
             )
+        if summary["found"] and summary["tests_failed"]:
+            output = (
+                "COCOTB ERROR: Regression summary reports failing tests. "
+                "Treating simulation as failed even if make returned 0.\n" + output
+            )
 
         vcd_path = sim_dir / "dump.vcd"
         audit_path = sim_dir / "wavekit_audit.json"
         wavekit_audit = run_wavekit_vcd_audit(vcd_path, audit_path)
-        passed = result.returncode == 0 and not no_tests
+        passed = (
+            result.returncode == 0
+            and not no_tests
+            and (
+                not summary["found"]
+                or (summary["tests_total"] > 0 and summary["tests_failed"] == 0)
+            )
+        )
         if not wavekit_audit.get("ok"):
             output = (
                 "WAVEKIT VCD AUDIT WARNING: "
@@ -675,6 +736,9 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
             "passed": passed,
             "log": output,
             "returncode": result.returncode,
+            "tests_passed": summary["tests_passed"],
+            "tests_total": summary["tests_total"],
+            "tests_failed": summary["tests_failed"],
             "log_path": log_path,
             "vcd_path": str(vcd_path) if vcd_path.exists() else "",
             "wavekit_audit_path": str(audit_path),
