@@ -2616,14 +2616,84 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
             )
         except Exception as e:
             log(f"  [INTEG-DV] Testbench generation failed: {e}", RED)
-            write_graph_event(pr, "Integration DV", "graph_node_exit", {
-                "error": str(e), "phase": "tb_generation",
-            })
-            return {"integration_dv_result": {
-                "passed": False,
-                "error": f"Testbench generation failed: {e}",
+            error_msg = f"Integration testbench generation failed: {e}"
+            contract_audit = await _run_top_level_contract_audit(
+                stage="integration_dv_generation",
+                project_root=pr,
+                design_name=design_name,
+                top_rtl_path=top_rtl_path,
+                testbench_path="",
+                test_count=0,
+                sim_log=error_msg,
+                sim_log_path="",
+                block_rtl_paths=block_rtl_paths,
+            )
+            payload = {
+                "type": "integration_dv_failure",
                 "phase": "tb_generation",
-            }}
+                "design_name": design_name,
+                "top_rtl_path": top_rtl_path,
+                "testbench_path": "",
+                "test_count": 0,
+                "sim_log": error_msg,
+                "sim_log_path": "",
+                "block_rtl_paths": block_rtl_paths,
+                "contract_audit": contract_audit,
+                "contract_audit_path": contract_audit.get("audit_path", ""),
+                "supported_actions": [
+                    "retry",
+                    "fix_rtl",
+                    "fix_tb",
+                    "abort",
+                ],
+                "outer_agent_guidance": (
+                    "Integration DV could not generate a usable cocotb "
+                    "testbench. As the outer-loop diagnostic agent, inspect "
+                    "the top-level RTL, block port contracts, generator prompt, "
+                    "and any partially written testbench. Use action='fix_tb' "
+                    "when the testbench generator or prompt needs repair, "
+                    "action='fix_rtl' when the top-level contract is invalid, "
+                    "or action='retry' after an external fix. Do not mark the "
+                    "pipeline complete until Integration DV runs.\n\n"
+                    "Contract audit result: "
+                    f"{contract_audit.get('category', 'UNKNOWN')} -- "
+                    f"{contract_audit.get('outer_agent_summary', '')}"
+                ),
+                "reference_files": {
+                    "top_rtl": top_rtl_path,
+                    "contract_audit": contract_audit.get("audit_path", ""),
+                },
+            }
+            response = interrupt(payload)
+            action = response.get("action", "abort")
+            write_graph_event(pr, "Integration DV", "graph_node_exit", {
+                "error": str(e),
+                "phase": "tb_generation",
+                "action": action,
+            })
+            dv_result = {
+                "passed": False,
+                "error": error_msg,
+                "phase": "tb_generation",
+                "test_count": 0,
+                "testbench_path": "",
+                "design_name": design_name,
+                "action_taken": action,
+                "contract_audit": contract_audit,
+                "contract_audit_path": contract_audit.get("audit_path", ""),
+            }
+            if action == "abort":
+                dv_result["aborted"] = True
+                log("  [INTEG-DV] Aborted", RED)
+            elif action in ("retry", "fix_rtl", "fix_tb"):
+                fix_desc = response.get("rtl_fix_description", "")
+                dv_result["fix_applied"] = fix_desc
+                log(f"  [INTEG-DV] Fix applied: {fix_desc}", GREEN)
+            return {
+                "integration_dv_result": dv_result,
+                "pipeline_done": False,
+                "pipeline_aborted": action == "abort",
+            }
 
         tb_path = tb_result.get("testbench_path", "")
         test_count = tb_result.get("test_count", 0)
@@ -2653,13 +2723,16 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
                 "log_path": sim_result.get("log_path", ""),
             })
 
-            return {"integration_dv_result": {
-                "passed": True,
-                "test_count": test_count,
-                "testbench_path": tb_path,
-                "sim_log_path": sim_result.get("log_path", ""),
-                "design_name": design_name,
-            }}
+            return {
+                "integration_dv_result": {
+                    "passed": True,
+                    "test_count": test_count,
+                    "testbench_path": tb_path,
+                    "sim_log_path": sim_result.get("log_path", ""),
+                    "design_name": design_name,
+                },
+                "pipeline_done": False,
+            }
 
         # 3. Simulation failed -- interrupt for outer agent diagnosis
         log("  [INTEG-DV] FAILED", RED)
@@ -2764,7 +2837,11 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
             log(f"  [INTEG-DV] Fix applied: {fix_desc}", GREEN)
             dv_result["fix_applied"] = fix_desc
 
-        return {"integration_dv_result": dv_result}
+        return {
+            "integration_dv_result": dv_result,
+            "pipeline_done": False,
+            "pipeline_aborted": action == "abort",
+        }
 
 
 def _load_ers_validation_context(project_root: str) -> tuple[str, int]:
@@ -3058,7 +3135,11 @@ async def validation_dv_node(state: OrchestratorState) -> dict:
                 fix_desc = response.get("rtl_fix_description", "")
                 dv_result["fix_applied"] = fix_desc
                 log(f"  [VALIDATION-DV] Fix applied: {fix_desc}", GREEN)
-            return {"validation_dv_result": dv_result}
+            return {
+                "validation_dv_result": dv_result,
+                "pipeline_done": False,
+                "pipeline_aborted": action == "abort",
+            }
 
         tb_path = tb_result.get("testbench_path", "")
         test_count = tb_result.get("test_count", 0)
@@ -3086,14 +3167,17 @@ async def validation_dv_node(state: OrchestratorState) -> dict:
                 "requirement_count": requirement_count,
                 "log_path": sim_result.get("log_path", ""),
             })
-            return {"validation_dv_result": {
-                "passed": True,
-                "test_count": test_count,
-                "requirement_count": requirement_count,
-                "testbench_path": tb_path,
-                "sim_log_path": sim_result.get("log_path", ""),
-                "design_name": design_name,
-            }}
+            return {
+                "validation_dv_result": {
+                    "passed": True,
+                    "test_count": test_count,
+                    "requirement_count": requirement_count,
+                    "testbench_path": tb_path,
+                    "sim_log_path": sim_result.get("log_path", ""),
+                    "design_name": design_name,
+                },
+                "pipeline_done": True,
+            }
 
         log("  [VALIDATION-DV] FAILED", RED)
         for line in sim_log.split("\n")[-10:]:
@@ -3190,7 +3274,11 @@ async def validation_dv_node(state: OrchestratorState) -> dict:
             log(f"  [VALIDATION-DV] Fix applied: {fix_desc}", GREEN)
             dv_result["fix_applied"] = fix_desc
 
-        return {"validation_dv_result": dv_result}
+        return {
+            "validation_dv_result": dv_result,
+            "pipeline_done": False,
+            "pipeline_aborted": action == "abort",
+        }
 
 
 def route_after_validation_dv(state: OrchestratorState) -> str:

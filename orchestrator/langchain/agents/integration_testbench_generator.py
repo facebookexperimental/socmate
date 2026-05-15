@@ -140,6 +140,15 @@ class IntegrationTestbenchGenerator:
             # @cocotb.test() functions before claiming success; the
             # previous max(test_count, 1) lied to downstream SIM.
             testbench = self._extract_python(content)
+            if output_path:
+                disk_path = Path(output_path)
+                if disk_path.exists():
+                    disk_content = disk_path.read_text(encoding="utf-8")
+                    disk_test_count = len(
+                        re.findall(r"@cocotb\.test\(\)", disk_content)
+                    )
+                    if disk_test_count > 0:
+                        testbench = disk_content
             test_count = len(re.findall(r"@cocotb\.test\(\)", testbench))
 
             if not testbench or test_count == 0:

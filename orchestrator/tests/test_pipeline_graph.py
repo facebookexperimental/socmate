@@ -45,6 +45,7 @@ from orchestrator.langgraph.pipeline_graph import (
     block_done_node,
     pipeline_complete_node,
     ask_human_node,
+    integration_dv_node,
     validation_dv_node,
 )
 
@@ -230,6 +231,93 @@ class TestGraphConstruction:
             "integration_dv_result": {"passed": False, "action_taken": "fix_tb"},
         })
         assert result == "integration_dv"
+
+    @pytest.mark.asyncio
+    async def test_integration_dv_generation_failure_interrupts(self, tmp_path, monkeypatch):
+        top_rtl = tmp_path / "chip_top.v"
+        block_rtl = tmp_path / "block.v"
+        top_rtl.write_text("module chip_top(input clk); endmodule\n", encoding="utf-8")
+        block_rtl.write_text("module block(input clk); endmodule\n", encoding="utf-8")
+
+        monkeypatch.setattr(
+            pipeline_graph,
+            "load_architecture_connections",
+            lambda _pr: ({}, {}),
+        )
+
+        async def fail_generate(**_kwargs):
+            raise RuntimeError("no usable Python cocotb testbench")
+
+        async def fake_contract_audit(**kwargs):
+            assert kwargs["stage"] == "integration_dv_generation"
+            assert kwargs["testbench_path"] == ""
+            return {
+                "category": "INTEGRATION_TB_BUG",
+                "recommended_action": "fix_tb",
+                "outer_agent_summary": "generator returned no tests",
+                "audit_path": str(tmp_path / "audit.json"),
+            }
+
+        interrupts = []
+
+        def fake_interrupt(payload):
+            interrupts.append(payload)
+            return {"action": "fix_tb", "rtl_fix_description": "repair generator"}
+
+        monkeypatch.setattr(pipeline_graph, "generate_integration_testbench", fail_generate)
+        monkeypatch.setattr(pipeline_graph, "_run_top_level_contract_audit", fake_contract_audit)
+        monkeypatch.setattr(pipeline_graph, "interrupt", fake_interrupt)
+
+        result = await integration_dv_node({
+            "project_root": str(tmp_path),
+            "integration_result": {
+                "top_rtl_path": str(top_rtl),
+                "design_name": "chip_top",
+                "block_rtl_paths": {"block": str(block_rtl)},
+            },
+        })
+
+        dv_result = result["integration_dv_result"]
+        assert dv_result["passed"] is False
+        assert dv_result["phase"] == "tb_generation"
+        assert dv_result["action_taken"] == "fix_tb"
+        assert result["pipeline_done"] is False
+        assert route_after_integration_dv(result) == "integration_dv"
+        assert interrupts
+        assert interrupts[0]["phase"] == "tb_generation"
+        assert interrupts[0]["contract_audit"]["category"] == "INTEGRATION_TB_BUG"
+
+    @pytest.mark.asyncio
+    async def test_integration_testbench_generator_accepts_written_file(self, tmp_path):
+        from orchestrator.langchain.agents.integration_testbench_generator import (
+            IntegrationTestbenchGenerator,
+        )
+
+        output_path = tmp_path / "test_chip_top.py"
+        generated = (
+            "import cocotb\n\n"
+            "@cocotb.test()\n"
+            "async def test_reset(dut):\n"
+            "    assert True\n"
+        )
+        agent = IntegrationTestbenchGenerator()
+
+        async def fake_call(**_kwargs):
+            output_path.write_text(generated, encoding="utf-8")
+            return f"Implemented the cocotb integration testbench at {output_path}"
+
+        agent.llm.call = fake_call
+        result = await agent.generate(
+            design_name="chip_top",
+            top_rtl_source="module chip_top(input clk); endmodule\n",
+            block_summaries=[],
+            connections=[],
+            output_path=str(output_path),
+        )
+
+        assert result["tb_path"] == str(output_path)
+        assert result["test_count"] == 1
+        assert output_path.read_text(encoding="utf-8") == generated
 
     def test_validation_dv_retries_on_fix_action(self):
         result = route_after_validation_dv({
