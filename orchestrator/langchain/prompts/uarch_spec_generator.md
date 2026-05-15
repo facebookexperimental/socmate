@@ -224,6 +224,14 @@ safe. Do not leave this section empty.
 - Every register/memory element with its reset value
 - Reset polarity and type (must match ERS)
 - Initialization sequence (if multi-cycle init is needed)
+- Reset-idle must be distinguished from protocol completion. Empty/idle
+  status after reset may report zero occupancy, no valid payload, and ready
+  handshakes, but it MUST NOT assert event/completion flags such as `done`,
+  `drained`, `frame_complete`, `packet_complete`, terminal `tlast`, or
+  completion mirrors in `tuser` unless the ERS explicitly defines reset as
+  such an event. If a flag semantically means "a transaction/frame/packet has
+  completed", its reset value is normally 0 and it asserts only after the
+  required terminal handshake or measured condition occurs.
 
 ## 6. Timing and Performance
 - Critical path estimate (describe longest combinational path)
@@ -273,6 +281,10 @@ Rules:
 - Overflow/underflow handling (wrap, saturate, or flag -- per ERS)
 - First-sample-after-reset behavior
 - Empty/idle behavior
+- For status outputs, explicitly state which bits mean idle/empty state and
+  which bits mean a completed event. Do not collapse "empty after reset" into
+  "drained/completed after terminal transaction" unless the ERS says they are
+  equivalent.
 - For streaming interfaces: packet boundary (tlast) behavior
 - For simple interfaces: behavior during and immediately after reset
 

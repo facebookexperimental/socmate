@@ -143,6 +143,12 @@ RULES:
    a. Reset test: verify outputs are zero/idle after reset
    b. Known-vector test: specific inputs with known correct outputs
    c. Random stress test: 100+ random inputs compared to golden model
+   Reset tests must not assert transaction-completion semantics by default.
+   If a status bit or sideband field is named `done`, `drained`,
+   `frame_complete`, `packet_complete`, terminal `tlast`, or otherwise
+   represents a completed event, expect it to be 0 after reset unless the ERS
+   explicitly says reset itself creates that event. Treat reset-idle/empty as
+   different from post-transaction completion.
 10. Use `assert` for pass/fail -- cocotb treats AssertionError as test failure.
 11. NEVER use `cocotb.start_fork()` -- it was removed in cocotb 2.0.
     Use `cocotb.start_soon()` instead.

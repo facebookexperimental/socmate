@@ -64,6 +64,10 @@ Frame-control lifecycle invariant:
   and unaccepted held output transactions. After a frame-end flush is accepted and
   the output FIFO reports empty/drained with frame TLAST seen, `codec_busy` must
   be able to deassert and remain low until the next explicit frame-start event.
+- Output FIFO `drained` is a terminal frame-completion event, not a synonym for
+  reset-idle emptiness. After reset, an empty FIFO must report occupancy zero
+  with `drained=0` and no terminal status TLAST/TUSER completion mirror until a
+  frame-final TLAST output transaction has been accepted downstream.
 - Block, smoke, integration, and validation DV must include a VCD/FST waveform
   check for this lifecycle: frame start, frame end flush, FIFO drain, idle
   deassertion, and no unintended immediate restart.
