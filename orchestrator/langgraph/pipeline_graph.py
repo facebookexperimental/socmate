@@ -1829,6 +1829,26 @@ async def integration_review_node(state: OrchestratorState) -> dict:
     else:
         review_failed = False
 
+    completed_by_name = {
+        b.get("name"): b
+        for b in state.get("completed_blocks", [])
+        if isinstance(b, dict) and b.get("name")
+    }
+    failed_tier_blocks = [
+        name
+        for name in block_names
+        if name in completed_by_name and not completed_by_name[name].get("success")
+    ]
+    if failed_tier_blocks:
+        failure_note = (
+            "Blocking tier failure: uArch integration review cannot be approved "
+            "because these current-tier blocks have not passed their lifecycle: "
+            f"{', '.join(failed_tier_blocks)}."
+        )
+        review_summary = f"{failure_note}\n\n{review_summary}"
+        issues_found = int(issues_found or 0) + len(failed_tier_blocks)
+        review_failed = True
+
     log(f"  [INTEGRATION REVIEW] {review_summary[:200]}", GREEN if issues_found == 0 else YELLOW)
 
     spec_paths = {
@@ -1858,6 +1878,13 @@ async def integration_review_node(state: OrchestratorState) -> dict:
 
     response = interrupt(payload)
     action = response.get("action", "abort")
+    if action == "approve" and failed_tier_blocks:
+        log(
+            "  [INTEGRATION REVIEW] Approval rejected because current-tier "
+            "blocks failed; treating as revise",
+            YELLOW,
+        )
+        action = "revise"
     if action == "revise" and issues_found == 0 and not review_failed:
         log(
             "  [INTEGRATION REVIEW] Clean review returned revise; "

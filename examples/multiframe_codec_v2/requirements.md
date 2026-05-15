@@ -53,3 +53,17 @@ CAVLC golden model can achieve:
 
 Optimize for a clean, stream-oriented soft IP rather than MMIO. Do not require
 memory map, register spec, or clock-tree elaboration unless explicitly enabled.
+
+Frame-control lifecycle invariant:
+
+- The design must have an explicit frame-start/input-active lifecycle event.
+  A control block must not infer a new frame solely from an idle output register,
+  ready/valid availability, or the ability to emit a status token.
+- `codec_busy` must be tied to real occupancy: accepted input/frame activity,
+  live pipeline state, non-empty/draining output FIFO state, valid status inputs,
+  and unaccepted held output transactions. After a frame-end flush is accepted and
+  the output FIFO reports empty/drained with frame TLAST seen, `codec_busy` must
+  be able to deassert and remain low until the next explicit frame-start event.
+- Block, smoke, integration, and validation DV must include a VCD/FST waveform
+  check for this lifecycle: frame start, frame end flush, FIFO drain, idle
+  deassertion, and no unintended immediate restart.
