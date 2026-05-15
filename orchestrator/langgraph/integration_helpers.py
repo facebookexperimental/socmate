@@ -925,6 +925,7 @@ def run_integration_simulation(
         dict with: passed (bool), log (str), returncode (int), log_path (str).
     """
     import os
+    import signal
     import shutil
     from orchestrator.langgraph.pipeline_helpers import (
         _normalize_cocotb_timing_keywords,
@@ -954,7 +955,7 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
 """
     (sim_dir / "Makefile").write_text(makefile_content)
 
-    sim_tb_path = sim_dir / f"test_{design_name}.py"
+    sim_tb_path = sim_dir / Path(tb_path).name
     shutil.copy2(tb_path, sim_tb_path)
     _normalize_cocotb_timing_keywords(sim_tb_path)
 
@@ -967,13 +968,46 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
 
     make_bin = shutil.which("make") or "make"
 
+    sim_timeout_s = int(
+        os.environ.get(
+            "SOCMATE_INTEGRATION_SIM_TIMEOUT",
+            os.environ.get("SOCMATE_VALIDATION_DV_TIMEOUT", "600"),
+        )
+    )
+
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             [make_bin, "-C", str(sim_dir)],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=600,
             env=env,
+            start_new_session=True,
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=sim_timeout_s)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            stdout, stderr = proc.communicate()
+            cmd = [make_bin, "-C", str(sim_dir)]
+            msg = f"Integration simulation timed out ({sim_timeout_s} s)"
+            log_path = _write_step_log_error(
+                "integration", "integration_sim", cmd,
+                msg, attempt,
+            )
+            return {
+                "passed": False,
+                "log": msg + "\n" + (stdout or "")[-2500:] + "\n" + (stderr or "")[-2500:],
+                "log_path": log_path,
+            }
+        result = subprocess.CompletedProcess(
+            [make_bin, "-C", str(sim_dir)],
+            proc.returncode,
+            stdout,
+            stderr,
         )
         log_path = _write_step_log(
             "integration", "integration_sim", [make_bin, "-C", str(sim_dir)],
@@ -1023,13 +1057,6 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
             "wavekit_audit_path": str(audit_path),
             "wavekit_audit": wavekit_audit,
         }
-    except subprocess.TimeoutExpired:
-        cmd = [make_bin, "-C", str(sim_dir)]
-        log_path = _write_step_log_error(
-            "integration", "integration_sim", cmd,
-            "Integration simulation timed out (10 min)", attempt,
-        )
-        return {"passed": False, "log": "Integration simulation timed out (10 min)", "log_path": log_path}
     except FileNotFoundError as e:
         cmd = [make_bin, "-C", str(sim_dir)]
         log_path = _write_step_log_error(

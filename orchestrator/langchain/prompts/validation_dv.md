@@ -51,6 +51,21 @@ COCOTB RULES:
 - Do not import project-specific Python unless the ERS/top-level context names
   an available golden model path. If a golden model is used, keep the import
   guarded and add a clear fallback error.
+- Do not convert or compare multi-kilobit internal `tdata` signals through
+  cocotb/VPI every cycle. Verilator/cocotb can truncate very wide string
+  values. For wide internal streams, monitor `tvalid`, `tready`, `tlast`, and
+  narrow semantic/debug fields only; use VCD/WaveKit post-processing or RTL
+  debug hashes/assertions for payload stability if full-width evidence is
+  required. Top-level byte streams and narrow trace/status streams may be read
+  directly.
+- Keep validation runtime bounded. Prefer short directed frames/prefixes for
+  semantic and AXI tests, and reserve full-frame simulation only for KPI tests
+  whose ERS requirement explicitly needs a full frame.
+- When injecting source-side gaps, base gap decisions on a cycle counter or a
+  state machine that always eventually reasserts `tvalid`. Do not define a gap
+  predicate solely from the accepted-transfer count; if the predicate is true
+  for the current accepted count, no further handshakes can occur and the driver
+  deadlocks itself.
 
 REQUIREMENT COVERAGE RULES:
 - Define `REQUIREMENT_COVERAGE` at module scope as a dict keyed by ERS IDs or
