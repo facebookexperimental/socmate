@@ -2769,7 +2769,7 @@ async def _merge_block_into_pipeline_checkpoint(block_result: dict) -> bool:
         await _pipeline.graph.aupdate_state(
             config,
             {"completed_blocks": completed},
-            as_node="block_done",
+            as_node="process_block",
         )
         return True
     except Exception:

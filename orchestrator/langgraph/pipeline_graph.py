@@ -1953,20 +1953,20 @@ def route_after_integration_review(state: OrchestratorState) -> str:
 
     approve → advance_tier (continue normally)
     abort   → END (terminate the pipeline)
-    revise  → END (outer agent should restart_block for affected specs,
-              then re-invoke the pipeline)
+    revise  → init_tier (rerun the current tier from the revised uArch specs)
     """
     action = state.get("integration_review_action", "approve")
     if action == "abort":
         return END
     if action == "revise":
-        return END
+        return "init_tier"
     return "advance_tier"
 
 
 route_after_integration_review.__edge_labels__ = {
     "advance_tier": "APPROVED",
-    END: "ABORT / REVISE",
+    "init_tier": "REVISE",
+    END: "ABORT",
 }
 
 
