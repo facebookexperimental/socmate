@@ -1122,7 +1122,10 @@ async def constraint_check_node(state: ArchGraphState) -> dict:
             benchmark_results=state.get("benchmark_data"),
             pdk_config=state.get("pdk_config"),
             requirements=state.get("requirements", ""),
-            ers_spec=state.get("prd_spec"),
+            ers_spec={
+                "prd": state.get("prd_spec") or {},
+                "ers": state.get("ers_spec") or {},
+            },
             project_root=state["project_root"],
         )
 

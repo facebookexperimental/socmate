@@ -14,6 +14,17 @@ top-level module generation. Do NOT flag the absence of these blocks as a
 violation. Clock domain conventions (port names, polarity, CDC crossing types)
 are defined in the clock tree document and enforced at integration time.
 
+DERIVED CONTRACT NOTE:
+The deterministic checker runs before this LLM review and already audits
+generic derived arithmetic where possible: dimensions/tile counts, coordinate
+ranges, coordinate field widths, and total transaction counts. Your review must
+still look for the same class of issue in domains that are harder to parse:
+tensor shapes, protocol length fields, SRAM/buffer capacities, bandwidth
+budgets, packet counts, sequence ordering, and producer/consumer payload
+layouts. Treat these as architecture constraints, not implementation details.
+If a derived fact is missing, inconsistent, or too vague for RTL agents to
+implement unambiguously, emit a violation with check="derived_contract".
+
 CATEGORY CLASSIFICATION:
 - "structural": Requires human architect input to resolve (e.g., too many
   peripherals, missing blocks, fundamental design conflicts).

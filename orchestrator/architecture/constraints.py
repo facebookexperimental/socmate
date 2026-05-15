@@ -20,6 +20,7 @@ Each violation dict has:
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from typing import Any
@@ -212,6 +213,317 @@ def _check_shuttle_constraints(
     return violations
 
 
+def _near_domain_text(text: str, start: int, end: int) -> str:
+    lo = max(0, start - 120)
+    hi = min(len(text), end + 120)
+    return text[lo:hi]
+
+
+def _extract_json_numbers(payload: Any) -> dict[str, int]:
+    """Extract numeric facts from structured architecture artifacts.
+
+    This is intentionally schema-tolerant. Architecture agents use different
+    names for the same concepts, so the deterministic constraint checker looks
+    for common semantic keys instead of one codec-specific schema.
+    """
+    out: dict[str, int] = {}
+
+    def visit(value: Any, key_path: str = "") -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                child = f"{key_path}.{key}" if key_path else str(key)
+                visit(item, child)
+            return
+        if isinstance(value, list):
+            for idx, item in enumerate(value):
+                visit(item, f"{key_path}[{idx}]")
+            return
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            key = key_path.lower()
+            intval = int(value)
+            if any(token in key for token in ("width", "frame_w", "image_w", "matrix_m")):
+                out.setdefault("width", intval)
+            if any(token in key for token in ("height", "frame_h", "image_h", "matrix_n")):
+                out.setdefault("height", intval)
+            if any(token in key for token in ("block_width", "tile_width", "macroblock_width")):
+                out.setdefault("block_width", intval)
+            if any(token in key for token in ("block_height", "tile_height", "macroblock_height")):
+                out.setdefault("block_height", intval)
+            if any(token in key for token in ("columns", "cols", "mb_cols", "block_cols")):
+                out.setdefault("columns", intval)
+            if any(token in key for token in ("rows", "mb_rows", "block_rows")):
+                out.setdefault("rows", intval)
+            if key.endswith("mb_x") or key.endswith("x_max") or "mb_x_max" in key:
+                out.setdefault("mb_x_max", intval)
+            if key.endswith("mb_y") or key.endswith("y_max") or "mb_y_max" in key:
+                out.setdefault("mb_y_max", intval)
+
+    visit(payload)
+    return out
+
+
+def _artifact_text(
+    *,
+    block_diagram: dict,
+    memory_map: dict,
+    clock_tree: dict,
+    register_spec: dict,
+    requirements: str,
+    ers_spec: dict | None,
+    project_root: str,
+) -> tuple[str, dict[str, int]]:
+    parts = [requirements]
+    structured = {
+        "block_diagram": block_diagram,
+        "memory_map": memory_map,
+        "clock_tree": clock_tree,
+        "register_spec": register_spec,
+        "ers_spec": ers_spec or {},
+    }
+    facts = _extract_json_numbers(structured)
+    parts.append(json.dumps(structured, indent=2, default=str))
+
+    root = Path(project_root)
+    read_project_docs = project_root not in ("", ".")
+    if read_project_docs:
+        for rel in (
+            "arch/prd_spec.md",
+            "arch/sad_spec.md",
+            "arch/frd_spec.md",
+            "arch/block_diagram.md",
+            "arch/ers_spec.md",
+        ):
+            path = root / rel
+            if path.exists():
+                try:
+                    parts.append(path.read_text(encoding="utf-8"))
+                except OSError:
+                    pass
+        uarch_dir = root / "arch" / "uarch_specs"
+        if uarch_dir.exists():
+            for path in sorted(uarch_dir.glob("*.md")):
+                try:
+                    parts.append(path.read_text(encoding="utf-8"))
+                except OSError:
+                    pass
+
+    return "\n".join(parts), facts
+
+
+def _extract_dimension_facts(text: str, structured_facts: dict[str, int]) -> dict[str, Any]:
+    lower = text.lower()
+    facts: dict[str, Any] = {"structured": structured_facts}
+
+    dims: list[tuple[int, int, str]] = []
+    for match in re.finditer(r"\b(\d{2,5})\s*[x×]\s*(\d{2,5})\b", text, flags=re.IGNORECASE):
+        context = _near_domain_text(lower, match.start(), match.end())
+        if any(token in context for token in ("frame", "image", "video", "pixel", "matrix", "tensor")):
+            w = int(match.group(1))
+            h = int(match.group(2))
+            dims.append((w, h, match.group(0)))
+    if "width" in structured_facts and "height" in structured_facts:
+        dims.append((structured_facts["width"], structured_facts["height"], "structured width/height"))
+    if dims:
+        # Prefer the largest plausible 2-D data object over small block sizes.
+        facts["source_dim"] = max(dims, key=lambda item: item[0] * item[1])
+
+    blocks: list[tuple[int, int, str]] = []
+    for match in re.finditer(
+        r"\b(\d{1,4})\s*[x×]\s*(\d{1,4})\s+(?:macroblocks?|blocks?|tiles?|subblocks?)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        bw = int(match.group(1))
+        bh = int(match.group(2))
+        if bw > 0 and bh > 0:
+            blocks.append((bw, bh, match.group(0)))
+    for match in re.finditer(
+        r"\b(?:macroblock|block|tile)[-_ ]?(?:size|dimensions?)\D{0,40}(\d{1,4})\s*[x×]\s*(\d{1,4})\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        bw = int(match.group(1))
+        bh = int(match.group(2))
+        if bw > 0 and bh > 0:
+            blocks.append((bw, bh, match.group(0)))
+    if "block_width" in structured_facts and "block_height" in structured_facts:
+        blocks.append((structured_facts["block_width"], structured_facts["block_height"], "structured block width/height"))
+    if blocks:
+        # Prefer small square-ish block/tile sizes over frame dimensions.
+        facts["block_dim"] = min(blocks, key=lambda item: item[0] * item[1])
+
+    col_row_claims: list[dict[str, Any]] = []
+    patterns = [
+        r"\b(\d{1,6})\s+(?:macroblock\s+|block\s+|tile\s+)?columns?.{0,80}?\b(\d{1,6})\s+(?:macroblock\s+|block\s+|tile\s+)?rows?\b",
+        r"\b(\d{1,6})\s+(?:macroblocks?|blocks?|tiles?)\s+per\s+row.{0,80}?\b(\d{1,6})\s+(?:rows?|row groups?)\b",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE | re.DOTALL):
+            col_row_claims.append({
+                "columns": int(match.group(1)),
+                "rows": int(match.group(2)),
+                "source": " ".join(match.group(0).split())[:180],
+            })
+    if "columns" in structured_facts and "rows" in structured_facts:
+        col_row_claims.append({
+            "columns": structured_facts["columns"],
+            "rows": structured_facts["rows"],
+            "source": "structured columns/rows",
+        })
+    facts["col_row_claims"] = col_row_claims
+
+    coord_claims: list[dict[str, Any]] = []
+    for match in re.finditer(
+        r"\b([A-Za-z_][A-Za-z0-9_]*(?:x|_x|_col|col))\s*[=:]?\s*0\s*\.\.\s*(\d{1,6})",
+        text,
+    ):
+        coord_claims.append({"axis": "x", "name": match.group(1), "max": int(match.group(2)), "source": match.group(0)})
+    for match in re.finditer(
+        r"\b([A-Za-z_][A-Za-z0-9_]*(?:y|_y|_row|row))\s*[=:]?\s*0\s*\.\.\s*(\d{1,6})",
+        text,
+    ):
+        coord_claims.append({"axis": "y", "name": match.group(1), "max": int(match.group(2)), "source": match.group(0)})
+    facts["coord_claims"] = coord_claims
+
+    total_claims: list[dict[str, Any]] = []
+    for match in re.finditer(
+        r"\b(?:exactly\s+)?(\d{2,8})\s+(?:macroblocks?|blocks?|tiles?|transactions?)\s+(?:per\s+frame|total|in\s+total|for\b)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        total_claims.append({"total": int(match.group(1)), "source": " ".join(match.group(0).split())})
+    facts["total_claims"] = total_claims
+
+    width_claims: list[dict[str, Any]] = []
+    for coord in ("mb_x", "mb_y", "x", "y", "col", "row"):
+        for match in re.finditer(
+            rf"\b{re.escape(coord)}\b.{{0,80}}?\b(\d{{1,2}})\s*bits?\b",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        ):
+            width_claims.append({"name": coord, "bits": int(match.group(1)), "source": " ".join(match.group(0).split())[:160]})
+    facts["width_claims"] = width_claims
+    return facts
+
+
+def _check_derived_constraints(
+    block_diagram: dict,
+    memory_map: dict,
+    clock_tree: dict,
+    register_spec: dict,
+    requirements: str,
+    ers_spec: dict | None,
+    project_root: str,
+) -> list[dict]:
+    """Check generic derived arithmetic and contract consistency.
+
+    This is deliberately domain-agnostic: it validates facts such as
+    dimensions/tile counts/coordinate ranges/field widths once the artifacts
+    themselves introduce those concepts. The codec bug was one instance of this
+    class: width-derived columns and height-derived rows were transposed.
+    """
+    text, structured = _artifact_text(
+        block_diagram=block_diagram,
+        memory_map=memory_map,
+        clock_tree=clock_tree,
+        register_spec=register_spec,
+        requirements=requirements,
+        ers_spec=ers_spec,
+        project_root=project_root,
+    )
+    facts = _extract_dimension_facts(text, structured)
+    violations: list[dict] = []
+
+    source_dim = facts.get("source_dim")
+    block_dim = facts.get("block_dim")
+    if source_dim and block_dim:
+        width, height, dim_src = source_dim
+        block_w, block_h, block_src = block_dim
+        if block_w > 0 and block_h > 0 and width % block_w == 0 and height % block_h == 0:
+            expected_cols = width // block_w
+            expected_rows = height // block_h
+            expected_total = expected_cols * expected_rows
+
+            for claim in facts.get("col_row_claims", []):
+                cols = claim["columns"]
+                rows = claim["rows"]
+                if cols != expected_cols or rows != expected_rows:
+                    violations.append({
+                        "violation": (
+                            "Derived geometry mismatch: source dimensions "
+                            f"{width}x{height} from {dim_src!r} and block dimensions "
+                            f"{block_w}x{block_h} from {block_src!r} require "
+                            f"{expected_cols} columns and {expected_rows} rows, but artifact "
+                            f"claims {cols} columns and {rows} rows ({claim['source']}). "
+                            "Width-derived counts are columns/x; height-derived counts are rows/y."
+                        ),
+                        "category": "auto_fixable",
+                        "check": "derived_geometry_columns_rows",
+                        "severity": "error",
+                    })
+
+            for coord in facts.get("coord_claims", []):
+                expected_max = expected_cols - 1 if coord["axis"] == "x" else expected_rows - 1
+                if coord["max"] != expected_max:
+                    violations.append({
+                        "violation": (
+                            f"Derived coordinate range mismatch: {coord['name']} range "
+                            f"{coord['source']} implies max {coord['max']}, but "
+                            f"{width}x{height} split into {block_w}x{block_h} blocks "
+                            f"requires {coord['axis']} max {expected_max}."
+                        ),
+                        "category": "auto_fixable",
+                        "check": "derived_coordinate_range",
+                        "severity": "error",
+                    })
+
+            for total in facts.get("total_claims", []):
+                if total["total"] != expected_total:
+                    violations.append({
+                        "violation": (
+                            f"Derived transaction count mismatch: {width}x{height} split into "
+                            f"{block_w}x{block_h} blocks requires {expected_total} total "
+                            f"blocks/transactions, but artifact claims {total['total']} "
+                            f"({total['source']})."
+                        ),
+                        "category": "auto_fixable",
+                        "check": "derived_transaction_count",
+                        "severity": "error",
+                    })
+
+            coord_max = {"mb_x": expected_cols - 1, "x": expected_cols - 1, "col": expected_cols - 1,
+                         "mb_y": expected_rows - 1, "y": expected_rows - 1, "row": expected_rows - 1}
+            for width_claim in facts.get("width_claims", []):
+                name = width_claim["name"].lower()
+                max_value = coord_max.get(name)
+                if max_value is None:
+                    continue
+                needed = max(1, math.ceil(math.log2(max_value + 1)))
+                if width_claim["bits"] < needed:
+                    violations.append({
+                        "violation": (
+                            f"Coordinate field width too small: {width_claim['source']} gives "
+                            f"{width_claim['bits']} bits, but max {max_value} requires at least "
+                            f"{needed} bits."
+                        ),
+                        "category": "auto_fixable",
+                        "check": "derived_coordinate_width",
+                        "severity": "error",
+                    })
+
+    try:
+        socmate_dir = Path(project_root) / ".socmate"
+        socmate_dir.mkdir(parents=True, exist_ok=True)
+        (socmate_dir / "derived_constraints_audit.json").write_text(
+            json.dumps({"facts": facts, "violations": violations}, indent=2, default=str),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+    return violations
+
+
 def _shuttle_constraints_enabled(requirements: str = "", ers_spec: dict | None = None) -> bool:
     """Return whether package/shuttle constraints should be enforced.
 
@@ -276,6 +588,15 @@ async def check_constraints(
             _check_shuttle_constraints(block_diagram, ers_spec)
             if shuttle_enabled
             else []
+        )
+        derived_violations = _check_derived_constraints(
+            block_diagram=block_diagram,
+            memory_map=memory_map,
+            clock_tree=clock_tree,
+            register_spec=register_spec,
+            requirements=requirements,
+            ers_spec=ers_spec,
+            project_root=project_root,
         )
 
         # --- Extract PRD-driven limits ---
@@ -455,17 +776,19 @@ async def check_constraints(
             result = _parse_response(content)
             llm_violations = result.get("violations", [])
 
-            # Merge: deterministic shuttle violations first, then LLM violations
+            # Merge: deterministic violations first, then LLM violations.
             # Deduplicate: skip LLM violations for checks already covered
-            covered_checks = {v["check"] for v in shuttle_violations}
+            deterministic_violations = shuttle_violations + derived_violations
+            covered_checks = {v["check"] for v in deterministic_violations}
             deduped_llm = [
                 v for v in llm_violations
                 if v.get("check") not in covered_checks
             ]
-            violations = shuttle_violations + deduped_llm
+            violations = deterministic_violations + deduped_llm
 
             span.set_attribute("violation_count", len(violations))
             span.set_attribute("shuttle_violation_count", len(shuttle_violations))
+            span.set_attribute("derived_violation_count", len(derived_violations))
             span.set_attribute("llm_violation_count", len(deduped_llm))
             span.set_attribute("all_pass", len(violations) == 0)
             span.set_attribute("max_gate_count", max_gate_count)
@@ -484,14 +807,15 @@ async def check_constraints(
             span.set_attribute("error", str(e))
             span.set_status(_trace.StatusCode.ERROR, str(e))
             # Still return deterministic violations even if LLM fails
-            shuttle_violations.append({
+            deterministic_violations = shuttle_violations + derived_violations
+            deterministic_violations.append({
                 "violation": f"Constraint check LLM failed: {e}. "
                              f"Architecture may have unchecked violations.",
                 "category": "structural",
                 "check": "llm_error",
                 "severity": "warning",
             })
-            return shuttle_violations
+            return deterministic_violations
 
 
 def _safe_int(value: Any, default: int) -> int:
