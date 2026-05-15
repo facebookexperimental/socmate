@@ -562,6 +562,55 @@ class TestRouteAfterIntegrationReview:
         assert result["integration_review_action"] == "revise"
         assert result["integration_review_failed"] is True
 
+    @pytest.mark.asyncio
+    async def test_fixed_uarch_review_blocks_stale_artifact_approval(self, tmp_path, monkeypatch):
+        from orchestrator.langchain.agents import integration_review_agent
+
+        def fake_init(self, *args, **kwargs):
+            pass
+
+        async def fake_review(self, block_names, project_root):
+            spec_dir = tmp_path / "arch" / "uarch_specs"
+            spec_dir.mkdir(parents=True, exist_ok=True)
+            (spec_dir / "adder32.md").write_text("updated spec", encoding="utf-8")
+            return {
+                "summary": "Fixed status bus layout in adder32 uArch.",
+                "issues_found": 1,
+                "issues_fixed": 1,
+            }
+
+        captured_payload = {}
+
+        def fake_interrupt(payload):
+            captured_payload.update(payload)
+            return {"action": "approve"}
+
+        monkeypatch.setattr(
+            integration_review_agent.IntegrationReviewAgent,
+            "__init__",
+            fake_init,
+        )
+        monkeypatch.setattr(
+            integration_review_agent.IntegrationReviewAgent,
+            "review",
+            fake_review,
+        )
+        monkeypatch.setattr(pipeline_graph, "interrupt", fake_interrupt)
+
+        result = await pipeline_graph.integration_review_node({
+            "project_root": str(tmp_path),
+            "block_queue": [{"name": "adder32", "tier": 1}],
+            "tier_list": [1],
+            "current_tier_index": 0,
+            "completed_blocks": [{"name": "adder32", "success": True}],
+        })
+
+        assert captured_payload["review_failed"] is True
+        assert captured_payload["issues_fixed"] == 1
+        assert "Blocking uArch edits" in captured_payload["review_summary"]
+        assert result["integration_review_action"] == "revise"
+        assert result["integration_review_failed"] is True
+
 
 class TestRouteAfterIntegration:
     def test_clean_integration_goes_to_dv(self):

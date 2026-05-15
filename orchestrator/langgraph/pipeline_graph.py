@@ -1848,6 +1848,16 @@ async def integration_review_node(state: OrchestratorState) -> dict:
         review_summary = f"{failure_note}\n\n{review_summary}"
         issues_found = int(issues_found or 0) + len(failed_tier_blocks)
         review_failed = True
+    if issues_fixed:
+        stale_artifact_note = (
+            "Blocking uArch edits: integration review modified current-tier "
+            "uArch specs after RTL/testbench artifacts were generated. The "
+            "affected blocks must be regenerated from uArch before this tier "
+            "can be approved; otherwise stale RTL can falsely pass against the "
+            "old contract."
+        )
+        review_summary = f"{stale_artifact_note}\n\n{review_summary}"
+        review_failed = True
 
     log(f"  [INTEGRATION REVIEW] {review_summary[:200]}", GREEN if issues_found == 0 else YELLOW)
 
@@ -1882,6 +1892,13 @@ async def integration_review_node(state: OrchestratorState) -> dict:
         log(
             "  [INTEGRATION REVIEW] Approval rejected because current-tier "
             "blocks failed; treating as revise",
+            YELLOW,
+        )
+        action = "revise"
+    if action == "approve" and issues_fixed:
+        log(
+            "  [INTEGRATION REVIEW] Approval rejected because uArch specs "
+            "were edited after block artifacts were generated; treating as revise",
             YELLOW,
         )
         action = "revise"
