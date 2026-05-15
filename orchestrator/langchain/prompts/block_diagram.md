@@ -68,6 +68,14 @@ SEMANTIC CONTRACT AND STATEFUL FEEDBACK RULES:
 - Every connection may include a `semantic_contract` string describing payload
   layout, ordering, sideband metadata, valid modes, numeric format, and golden
   equivalence obligation. Use it whenever raw `data_width` is insufficient.
+- For framed, tiled, matrix, image, video, packet-grid, or block-based designs,
+  derive geometry directly from the golden model/user stimulus and include it
+  in `system_invariants` and relevant `semantic_contracts`: element dimensions,
+  block dimensions, blocks per row, rows of blocks, coordinate ranges, bit
+  widths, traversal order, terminal coordinate, and total transaction count.
+  Be explicit about axis meanings. A width-derived count is columns/x; a
+  height-derived count is rows/y. If the arithmetic is ambiguous, ask a
+  blocking question rather than guessing.
 
 SUBSYSTEM GUIDELINES:
 - Group blocks into logical subsystems to organize the block diagram visually.
