@@ -70,6 +70,20 @@ COCOTB RULES:
 - Keep validation runtime bounded. Prefer short directed frames/prefixes for
   semantic and AXI tests, and reserve full-frame simulation only for KPI tests
   whose ERS requirement explicitly needs a full frame.
+- Derive watchdogs and expected completion windows from the documented ERS,
+  uArch, and RTL latency/throughput contracts. Do not use a fixed "short"
+  watchdog for requirements that must traverse an iterative or feedback-coupled
+  pipeline. For example, if one block documents ~N cycles per macroblock and a
+  feedback dependency serializes macroblocks, a first-stripe watchdog must scale
+  with `macroblocks_in_stripe * N` plus input/output margin. A validation test
+  may fail latency only against an explicit ERS KPI or a latency budget derived
+  from the architecture, not against an arbitrary constant.
+- If full-frame exhaustive RTL simulation would exceed a practical bounded
+  runtime and the ERS does not explicitly require full-frame RTL simulation,
+  verify geometry/lifecycle with a directed prefix plus terminal-coordinate
+  or wrapper/static checks, and mark the exhaustive full-frame KPI as deferred
+  to the named golden/preflight/backend stage with a concrete reason. Do not
+  claim full-frame RTL coverage from a shortened prefix.
 - When injecting source-side gaps, base gap decisions on a cycle counter or a
   state machine that always eventually reasserts `tvalid`. Do not define a gap
   predicate solely from the accepted-transfer count; if the predicate is true
