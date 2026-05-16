@@ -75,9 +75,11 @@ behavioral level.
        expected_throughput = 1.0 / pipeline_II            # ideal
        # pipeline_II = initiation interval (usually 1 for streaming designs)
 
-   Assert achieved throughput >= 90% of expected. For streaming pipelines
-   (PRD says "one sample per clock"), expect ~1.0 sample/cycle after the
-   pipeline fills. For batch designs, measure frames or transforms per
+   Assert achieved throughput >= 90% of expected only when the PRD/ERS gives
+   an explicit output-throughput or output-rate budget for that measured
+   stream. For streaming pipelines where the PRD says the same stream accepts
+   "one sample per clock", expect ~1.0 sample/cycle after the pipeline fills
+   for that input stream. For batch designs, measure frames or transforms per
    second against the PRD input_data_rate_mbps:
 
        min_samples_per_sec = input_data_rate_mbps * 1e6 / data_width_bits
@@ -87,14 +89,18 @@ behavioral level.
        cocotb.log.info(f"Throughput: {achieved:.3f} samples/cycle "
                        f"(expected >= {expected:.3f})")
 
-   If throughput is below 90% of expected, the test MUST fail with an
-   assert that includes both numbers.
+   If an explicit throughput budget exists and throughput is below 90% of
+   expected, the test MUST fail with an assert that includes both numbers.
+   If no explicit budget exists for the measured stream, log the measured
+   throughput but do not invent a pass/fail threshold.
 
 PERFORMANCE TEST RULES:
 - Extract target_clock_mhz, latency_budget_us, input_data_rate_mbps,
-  and data_width_bits from the PRD summary provided in context.
-- If a PRD field is missing, use conservative defaults:
-  latency_budget = 100 cycles, throughput = 0.5 samples/cycle.
+  output_data_rate_mbps, and data_width_bits from the PRD/ERS summary
+  provided in context.
+- If a PRD/ERS performance field is missing, do not invent a hard KPI. Use a
+  generous watchdog or architecture-derived sanity bound for liveness, log the
+  measured number, and leave KPI enforcement to Validation DV requirements.
 - Always log performance numbers even when the test passes -- these
   are valuable for the outer agent's trend analysis.
 - Use the @cocotb.test() decorator like all other tests.
