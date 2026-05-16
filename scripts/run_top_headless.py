@@ -137,6 +137,10 @@ async def _wait_for_decision(kind: str, poll_s: float, escalation_path: Path | N
             decision = json.loads(decision_path.read_text())
             if isinstance(decision, dict) and decision.get("action"):
                 print(f"[headless] loaded decision from {decision_path}", flush=True)
+                consumed_path = esc_dir / (
+                    f"{kind}.decision.consumed-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}.json"
+                )
+                decision_path.replace(consumed_path)
                 return decision
             raise RuntimeError(
                 f"Decision at {decision_path} must be a JSON object with an action"
