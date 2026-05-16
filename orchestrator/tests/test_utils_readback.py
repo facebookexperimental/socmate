@@ -52,3 +52,26 @@ def test_uarch_markdown_recovery_prefers_codex_call_spec(tmp_path):
         "Created the microarchitecture spec at arch/uarch_specs/output_fifo.md",
         recovered,
     ]) == rich_spec.strip()
+
+
+def test_rtl_recovery_finds_codex_call_verilog(tmp_path):
+    from orchestrator.langchain.agents.rtl_generator import _recover_codex_artifact
+
+    rtl = "module foo(input wire clk); endmodule\n"
+    isolated = tmp_path / "codex-call-rtl" / "rtl" / "foo.v"
+    isolated.parent.mkdir(parents=True)
+    isolated.write_text(rtl)
+
+    assert _recover_codex_artifact(str(tmp_path), "rtl/foo.v") == rtl
+
+
+def test_testbench_recovery_finds_codex_call_cocotb(tmp_path):
+    from orchestrator.langchain.agents.testbench_generator import _recover_codex_artifact
+
+    tb = "import cocotb\n\n@cocotb.test()\nasync def test_smoke(dut):\n    pass\n"
+    target = tmp_path / "tb" / "cocotb" / "test_foo.py"
+    isolated = tmp_path / "codex-call-tb" / "tb" / "cocotb" / "test_foo.py"
+    isolated.parent.mkdir(parents=True)
+    isolated.write_text(tb)
+
+    assert _recover_codex_artifact(str(target)) == tb

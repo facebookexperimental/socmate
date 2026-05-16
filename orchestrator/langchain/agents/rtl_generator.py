@@ -15,6 +15,7 @@ All invocations are traced via OpenTelemetry for observability and evaluation.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,29 @@ Output format:
    {{"module_name": "...", "ports": {{"clk": "input", ...}}}}
    ```
 """
+
+
+def _recover_codex_artifact(project_root: str | None, rel_path: str) -> str:
+    """Recover a file written inside a Codex per-call workdir."""
+    if not project_root or not rel_path:
+        return ""
+    root = Path(project_root)
+    try:
+        candidates = sorted(
+            root.glob(f"codex-call-*/{Path(rel_path).as_posix()}"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return ""
+    for candidate in candidates:
+        try:
+            text = candidate.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if re.search(r"^\s*module\s+\w+", text, re.MULTILINE):
+            return text + "\n"
+    return ""
 
 
 class RTLGeneratorAgent:
@@ -223,6 +247,11 @@ class RTLGeneratorAgent:
 
             rtl_path = Path(project_root) / rtl_target if project_root else Path(rtl_target)
             if rtl_path.exists():
+                return {"rtl_path": str(rtl_path)}
+            recovered = _recover_codex_artifact(project_root, rtl_target)
+            if recovered:
+                rtl_path.parent.mkdir(parents=True, exist_ok=True)
+                rtl_path.write_text(recovered, encoding="utf-8")
                 return {"rtl_path": str(rtl_path)}
             else:
                 return {"error": f"Agent did not write RTL to {rtl_target}"}
