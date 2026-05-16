@@ -95,6 +95,8 @@ def _write_decision_escalation(kind: str, state: dict, allowed_actions: list[str
             "pipeline": {
                 "action": "approve | retry | skip | abort | fix_rtl | fix_tb",
                 "block_actions": "optional object mapping block_name to action",
+                "constraint": "required for add_constraint; optional otherwise",
+                "rtl_fix_description": "optional for fix_rtl/fix_tb",
                 "rationale": "required human/triage-agent rationale",
             },
         },
@@ -614,9 +616,13 @@ async def run(args: argparse.Namespace) -> int:
             decision = await _wait_for_decision("pipeline_interrupt", args.poll_s, path)
             action = decision.get("action")
             block_actions = decision.get("block_actions") or {}
+            constraint = decision.get("constraint", "")
+            rtl_fix_description = decision.get("rtl_fix_description", "")
             print("[pipeline] applying decision", action, block_actions, flush=True)
             print(await mcp.resume_pipeline(
                 action=action,
+                constraint=constraint,
+                rtl_fix_description=rtl_fix_description,
                 block_actions=json.dumps(block_actions) if block_actions else "",
             ), flush=True)
 

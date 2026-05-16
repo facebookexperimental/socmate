@@ -1390,7 +1390,7 @@ async def ask_human_node(state: BlockState) -> dict:
             "ers": ".socmate/ers_spec.json",
         },
         "supported_actions": [
-            "retry", "fix_rtl", "add_constraint", "skip", "abort",
+            "retry", "fix_rtl", "fix_tb", "add_constraint", "skip", "abort",
         ],
         # Guidance for the outer agent
         "outer_agent_guidance": (
@@ -1628,6 +1628,7 @@ def route_after_human(state: BlockState) -> str:
     mapping = {
         "retry": "generate_rtl",
         "fix_rtl": "generate_rtl",
+        "fix_tb": "generate_testbench",
         "add_constraint": "generate_rtl",
         "skip": "block_done",
         "abort": "block_done",
@@ -1637,6 +1638,7 @@ def route_after_human(state: BlockState) -> str:
 
 route_after_human.__edge_labels__ = {
     "generate_rtl": "RETRY / FIX RTL",
+    "generate_testbench": "FIX TB",
     "block_done": "SKIP / ABORT",
 }
 
