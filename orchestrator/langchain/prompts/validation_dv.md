@@ -78,6 +78,13 @@ COCOTB RULES:
   with `macroblocks_in_stripe * N` plus input/output margin. A validation test
   may fail latency only against an explicit ERS KPI or a latency budget derived
   from the architecture, not against an arbitrary constant.
+- Hard guard: if a test waits for all items in a repeated structure such as
+  `macroblocks_in_stripe`, `tiles_per_frame`, packets in a burst, or tokens in
+  a sequence, compute `watchdog >= count * documented_per_item_latency + fixed
+  pipeline_fill_margin + output_stall_margin`. Do not use the same short
+  watchdog for "first item appears" and "all items complete". If the ERS has a
+  "first output" latency KPI, keep that as a separate assertion from the
+  all-items completion watchdog.
 - If full-frame exhaustive RTL simulation would exceed a practical bounded
   runtime and the ERS does not explicitly require full-frame RTL simulation,
   verify geometry/lifecycle with a directed prefix plus terminal-coordinate
