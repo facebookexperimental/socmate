@@ -131,6 +131,10 @@ COCOTB RULES (same as per-block):
   set `tvalid` after a falling edge and wait until another falling edge before
   checking `tready`, because the DUT may accept the beat on the intervening
   rising edge and the testbench will miss or duplicate the transaction.
+- Do not read very wide Verilator VPI signals as one Python integer. For
+  payloads wider than about 2048 bits, `int(dut.<wide_bus>.value)` can be
+  truncated by Verilator's VPI string buffer and produce false mismatches.
+  Compare field-sized debug aliases or chunk wires instead.
 - Use `assert` for pass/fail.
 
 TOP-LEVEL PORT NAMING:

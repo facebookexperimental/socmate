@@ -88,7 +88,18 @@ ALWAYS cast to plain Python int before assigning to DUT signals:
     dut.s_tdata.value = int(data_byte)        # CORRECT
     dut.s_tdata.value = np.uint8(data_byte)    # WRONG -- raises TypeError
 
-When reading signal values, use `int(dut.signal.value)` to get a plain Python int.
+When reading ordinary-width signal values, use `int(dut.signal.value)` to get a
+plain Python int.
+
+WIDE SIGNAL READS -- CRITICAL:
+Do not read very wide Verilator VPI signals as one Python integer. For payloads
+wider than about 2048 bits, `int(dut.<wide_bus>.value)` can be truncated by
+Verilator's VPI string buffer and produce false mismatches. Compare field-sized
+signals instead: either use existing RTL debug aliases for each payload field,
+or read explicitly exposed chunk wires that are each comfortably below the VPI
+limit. If the DUT only exposes one wide payload bus, add test-only/debug field
+aliases in RTL during generation rather than comparing the full bus as a single
+integer.
 
 OUTPUT TIMING CONTRACT -- READ FROM UARCH SPEC:
 The uArch spec (arch/uarch_specs/<block_name>.md) contains a mandatory
