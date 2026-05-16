@@ -781,6 +781,7 @@ async def gather_requirements_node(state: ArchGraphState) -> dict:
             target_clock_mhz=state["target_clock_mhz"],
             user_answers=user_answers,
             previous_questions=previous_questions,
+            project_root=state["project_root"],
         )
 
         phase = result.get("phase", "questions")
@@ -842,6 +843,7 @@ async def system_architecture_node(state: ArchGraphState) -> dict:
             prd_spec=state.get("prd_spec", {}),
             requirements=state["requirements"],
             pdk_summary=state["pdk_summary"],
+            project_root=state["project_root"],
         )
 
         sad_text = result.get("sad_text", "")
@@ -878,6 +880,7 @@ async def functional_requirements_node(state: ArchGraphState) -> dict:
             prd_spec=state.get("prd_spec", {}),
             sad_spec=state.get("sad_spec", {}),
             requirements=state["requirements"],
+            project_root=state["project_root"],
         )
 
         frd_text = result.get("frd_text", "")
@@ -1357,6 +1360,7 @@ async def create_documentation_node(state: ArchGraphState) -> dict:
                 memory_map=state.get("memory_map"),
                 clock_tree=state.get("clock_tree"),
                 register_spec=state.get("register_spec"),
+                project_root=project_root,
             )
 
             _persist_ers(project_root, ers_result)

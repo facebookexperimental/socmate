@@ -219,6 +219,45 @@ def _near_domain_text(text: str, start: int, end: int) -> str:
     return text[lo:hi]
 
 
+def _local_claim_text(text: str, start: int, end: int) -> str:
+    """Return the local clause/sentence that owns a numeric claim."""
+    delimiters = ".;\n\r{}[]"
+    lo = start
+    while lo > 0 and text[lo - 1] not in delimiters:
+        lo -= 1
+    hi = end
+    while hi < len(text) and text[hi] not in delimiters:
+        hi += 1
+    return text[lo:hi].lower()
+
+
+def _parse_claim_int(value: str) -> int:
+    return int(value.replace(",", ""))
+
+
+def _looks_like_physical_dimension(context: str) -> bool:
+    return any(
+        token in context
+        for token in (
+            "die dimension",
+            "die area",
+            "user area",
+            "user_width",
+            "user_height",
+            "core_margin",
+            "openframe",
+            "shuttle",
+            "sky130",
+            " mm",
+            "mm²",
+            " um",
+            "µm",
+            "metal",
+            "routing",
+        )
+    )
+
+
 def _extract_json_numbers(payload: Any) -> dict[str, int]:
     """Extract numeric facts from structured architecture artifacts.
 
@@ -317,12 +356,16 @@ def _extract_dimension_facts(text: str, structured_facts: dict[str, int]) -> dic
     dims: list[tuple[int, int, str]] = []
     for match in re.finditer(r"\b(\d{2,5})\s*[x×]\s*(\d{2,5})\b", text, flags=re.IGNORECASE):
         context = _near_domain_text(lower, match.start(), match.end())
-        if any(token in context for token in ("frame", "image", "video", "pixel", "matrix", "tensor")):
+        immediate = lower[max(0, match.start() - 40): min(len(lower), match.end() + 40)]
+        if _looks_like_physical_dimension(immediate):
+            continue
+        if any(token in context for token in ("frame", "image", "video", "pixel", "matrix", "tensor", "sample")):
             w = int(match.group(1))
             h = int(match.group(2))
             dims.append((w, h, match.group(0)))
     if "width" in structured_facts and "height" in structured_facts:
         dims.append((structured_facts["width"], structured_facts["height"], "structured width/height"))
+    facts["source_dims"] = dims
     if dims:
         # Prefer the largest plausible 2-D data object over small block sizes.
         facts["source_dim"] = max(dims, key=lambda item: item[0] * item[1])
@@ -348,6 +391,7 @@ def _extract_dimension_facts(text: str, structured_facts: dict[str, int]) -> dic
             blocks.append((bw, bh, match.group(0)))
     if "block_width" in structured_facts and "block_height" in structured_facts:
         blocks.append((structured_facts["block_width"], structured_facts["block_height"], "structured block width/height"))
+    facts["block_dims"] = blocks
     if blocks:
         # Prefer small square-ish block/tile sizes over frame dimensions.
         facts["block_dim"] = min(blocks, key=lambda item: item[0] * item[1])
@@ -359,6 +403,9 @@ def _extract_dimension_facts(text: str, structured_facts: dict[str, int]) -> dic
     ]
     for pattern in patterns:
         for match in re.finditer(pattern, text, flags=re.IGNORECASE | re.DOTALL):
+            context = _near_domain_text(lower, match.start(), match.end())
+            if "pixel" in context and not any(token in context for token in ("macroblock", "block", "tile")):
+                continue
             col_row_claims.append({
                 "columns": int(match.group(1)),
                 "rows": int(match.group(2)),
@@ -377,21 +424,56 @@ def _extract_dimension_facts(text: str, structured_facts: dict[str, int]) -> dic
         r"\b([A-Za-z_][A-Za-z0-9_]*(?:x|_x|_col|col))\s*[=:]?\s*0\s*\.\.\s*(\d{1,6})",
         text,
     ):
-        coord_claims.append({"axis": "x", "name": match.group(1), "max": int(match.group(2)), "source": match.group(0)})
+        name = match.group(1)
+        lname = name.lower()
+        if any(token in lname for token in ("pixel", "coeff", "quant", "sample", "byte", "bit", "addr", "index")):
+            continue
+        if any(token in lname for token in ("subblock", "local", "inner", "intra")):
+            continue
+        if not any(token in lname for token in ("mb", "macroblock", "block", "tile", "col")):
+            continue
+        coord_claims.append({"axis": "x", "name": name, "max": int(match.group(2)), "source": match.group(0)})
     for match in re.finditer(
         r"\b([A-Za-z_][A-Za-z0-9_]*(?:y|_y|_row|row))\s*[=:]?\s*0\s*\.\.\s*(\d{1,6})",
         text,
     ):
-        coord_claims.append({"axis": "y", "name": match.group(1), "max": int(match.group(2)), "source": match.group(0)})
+        name = match.group(1)
+        lname = name.lower()
+        if any(token in lname for token in ("pixel", "coeff", "quant", "sample", "byte", "bit", "addr", "index")):
+            continue
+        if any(token in lname for token in ("subblock", "local", "inner", "intra")):
+            continue
+        if not any(token in lname for token in ("mb", "macroblock", "block", "tile", "row")):
+            continue
+        coord_claims.append({"axis": "y", "name": name, "max": int(match.group(2)), "source": match.group(0)})
     facts["coord_claims"] = coord_claims
 
     total_claims: list[dict[str, Any]] = []
     for match in re.finditer(
-        r"\b(?:exactly\s+)?(\d{2,8})\s+(?:macroblocks?|blocks?|tiles?|transactions?)\s+(?:per\s+frame|total|in\s+total|for\b)",
+        r"\b(?:exactly\s+)?(\d{1,3}(?:,\d{3})+|\d{2,8})\s+(?:macroblocks?|blocks?|tiles?|transactions?)\s+(?:per\s+frame|total|in\s+total|for\b)",
         text,
         flags=re.IGNORECASE,
     ):
-        total_claims.append({"total": int(match.group(1)), "source": " ".join(match.group(0).split())})
+        context = _local_claim_text(lower, match.start(), match.end())
+        prefix = lower[max(0, match.start() - 20):match.start()]
+        if re.search(r"(?:\bby|[x×*])\s*$", prefix):
+            continue
+        if any(
+            token in context
+            for token in (
+                "previous",
+                "stale",
+                "violation",
+                "before/after",
+                "was fixed",
+                "removed",
+                "obsolete",
+                "incorrect",
+                "wrong",
+            )
+        ):
+            continue
+        total_claims.append({"total": _parse_claim_int(match.group(1)), "source": " ".join(match.group(0).split())})
     facts["total_claims"] = total_claims
 
     width_claims: list[dict[str, Any]] = []
@@ -404,6 +486,81 @@ def _extract_dimension_facts(text: str, structured_facts: dict[str, int]) -> dic
             width_claims.append({"name": coord, "bits": int(match.group(1)), "source": " ".join(match.group(0).split())[:160]})
     facts["width_claims"] = width_claims
     return facts
+
+
+def _select_derived_geometry_pair(facts: dict[str, Any]) -> tuple[tuple[int, int, str], tuple[int, int, str]] | tuple[None, None]:
+    """Select source/block dimensions that best explain explicit claims.
+
+    Architecture artifacts often mention multiple 2-D domains: video frame
+    size, physical die size, transform sub-blocks, SRAM shapes, and tile grids.
+    The derived checker should validate the contract domain whose dimensions
+    agree with the artifact's own columns/rows/ranges/totals instead of blindly
+    pairing the largest source dimension with the smallest block dimension.
+    """
+    sources = list(facts.get("source_dims") or [])
+    blocks = list(facts.get("block_dims") or [])
+    if not sources and facts.get("source_dim"):
+        sources = [facts["source_dim"]]
+    if not blocks and facts.get("block_dim"):
+        blocks = [facts["block_dim"]]
+
+    best: tuple[int, tuple[int, int, str], tuple[int, int, str]] | None = None
+    for source in sources:
+        width, height, _dim_src = source
+        for block in blocks:
+            block_w, block_h, block_src = block
+            if block_w <= 0 or block_h <= 0:
+                continue
+            if width % block_w != 0 or height % block_h != 0:
+                continue
+
+            expected_cols = width // block_w
+            expected_rows = height // block_h
+            expected_total = expected_cols * expected_rows
+            score = 0
+
+            for claim in facts.get("col_row_claims", []):
+                if claim["columns"] == expected_cols and claim["rows"] == expected_rows:
+                    score += 40
+                else:
+                    score -= 2
+
+            for total in facts.get("total_claims", []):
+                if total["total"] == expected_total:
+                    score += 20
+                else:
+                    score -= 1
+
+            for coord in facts.get("coord_claims", []):
+                expected_max = expected_cols - 1 if coord["axis"] == "x" else expected_rows - 1
+                if coord["max"] == expected_max:
+                    score += 8
+                else:
+                    score -= 1
+
+            block_text = block_src.lower()
+            if "macroblock" in block_text:
+                score += 8
+            if "tile" in block_text:
+                score += 5
+            if "subblock" in block_text:
+                score -= 8
+            if "structured" in block_text:
+                score += 4
+
+            source_text = source[2].lower()
+            if "structured" in source_text:
+                score += 4
+
+            if best is None or score > best[0]:
+                best = (score, source, block)
+
+    if best is None:
+        source = facts.get("source_dim")
+        block = facts.get("block_dim")
+        return (source, block) if source and block else (None, None)
+
+    return best[1], best[2]
 
 
 def _check_derived_constraints(
@@ -434,8 +591,7 @@ def _check_derived_constraints(
     facts = _extract_dimension_facts(text, structured)
     violations: list[dict] = []
 
-    source_dim = facts.get("source_dim")
-    block_dim = facts.get("block_dim")
+    source_dim, block_dim = _select_derived_geometry_pair(facts)
     if source_dim and block_dim:
         width, height, dim_src = source_dim
         block_w, block_h, block_src = block_dim
@@ -447,6 +603,13 @@ def _check_derived_constraints(
             for claim in facts.get("col_row_claims", []):
                 cols = claim["columns"]
                 rows = claim["rows"]
+                claim_source = str(claim.get("source", "")).lower()
+                if (
+                    cols == width
+                    and rows == height
+                    and not any(token in claim_source for token in ("macroblock", "block", "tile"))
+                ):
+                    continue
                 if cols != expected_cols or rows != expected_rows:
                     violations.append({
                         "violation": (
@@ -524,6 +687,124 @@ def _check_derived_constraints(
     return violations
 
 
+def _extract_clock_mhz(text: str, ers_spec: dict | None) -> float | None:
+    ers = (ers_spec.get("prd", ers_spec.get("ers", {})) if isinstance(ers_spec, dict) else {}) or {}
+    speed = ers.get("speed_and_feeds", {}) or {}
+    for key in ("target_clock_mhz", "clock_mhz"):
+        value = speed.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            return float(value)
+        if isinstance(value, str):
+            match = re.search(r"(\d+(?:\.\d+)?)", value)
+            if match:
+                return float(match.group(1))
+
+    match = re.search(r"\b(\d+(?:\.\d+)?)\s*MHz\b", text, flags=re.IGNORECASE)
+    return float(match.group(1)) if match else None
+
+
+def _extract_fps(text: str, ers_spec: dict | None) -> float | None:
+    ers = (ers_spec.get("prd", ers_spec.get("ers", {})) if isinstance(ers_spec, dict) else {}) or {}
+    candidates = "\n".join(_walk_text({
+        "speed_and_feeds": ers.get("speed_and_feeds", {}),
+        "kpis": ers.get("kpis", ers.get("validation_kpis", [])),
+        "requirements": ers.get("requirements", []),
+        "text": text,
+    }))
+    match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:fps|frames\s*/\s*s|frames\s+per\s+second)\b", candidates, flags=re.IGNORECASE)
+    return float(match.group(1)) if match else None
+
+
+def _check_performance_constraints(
+    *,
+    block_diagram: dict,
+    memory_map: dict,
+    clock_tree: dict,
+    register_spec: dict,
+    requirements: str,
+    ers_spec: dict | None,
+    project_root: str,
+) -> list[dict]:
+    """Check that stated cycle budgets do not contradict frame-rate KPIs."""
+    text, structured = _artifact_text(
+        block_diagram=block_diagram,
+        memory_map=memory_map,
+        clock_tree=clock_tree,
+        register_spec=register_spec,
+        requirements=requirements,
+        ers_spec=ers_spec,
+        project_root=project_root,
+    )
+    facts = _extract_dimension_facts(text, structured)
+    source_dim, block_dim = _select_derived_geometry_pair(facts)
+    clock_mhz = _extract_clock_mhz(text, ers_spec)
+    fps = _extract_fps(text, ers_spec)
+    if not source_dim or not block_dim or not clock_mhz or not fps:
+        return []
+
+    width, height, _ = source_dim
+    block_w, block_h, _ = block_dim
+    if block_w <= 0 or block_h <= 0 or width % block_w != 0 or height % block_h != 0:
+        return []
+
+    cols = width // block_w
+    rows = height // block_h
+    total_transactions = cols * rows
+    if total_transactions <= 0:
+        return []
+
+    cycles_per_frame_budget = int((clock_mhz * 1_000_000) // fps)
+    cycles_per_transaction_budget = cycles_per_frame_budget / total_transactions
+    violations: list[dict] = []
+
+    cycle_claims: list[tuple[int, str]] = []
+    for match in re.finditer(
+        r"\b(\d{1,9})\s+cycles?\s+per\s+(?:macroblock|block|tile|transaction)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        cycle_claims.append((int(match.group(1)), " ".join(match.group(0).split())))
+
+    for match in re.finditer(
+        r"\bwithin\s+(\d{1,9})\s*\+\s*(\d{1,9})\s*\*\s*(?:\d{1,9}|macroblocks?|blocks?|tiles?|transactions?)\s+cycles?\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        base = int(match.group(1))
+        per = int(match.group(2))
+        total = base + per * total_transactions
+        if total > cycles_per_frame_budget:
+            violations.append({
+                "violation": (
+                    f"Throughput KPI contradiction: {clock_mhz:g} MHz and {fps:g} fps allow "
+                    f"at most {cycles_per_frame_budget} cycles/frame for {width}x{height}. "
+                    f"The artifact claims {match.group(0)!r}, which implies {total} cycles/frame "
+                    f"for {total_transactions} transactions. Repair the block diagram with an "
+                    "explicit cycle budget that satisfies the KPI or ask a blocking question."
+                ),
+                "category": "auto_fixable",
+                "check": "performance_cycle_budget",
+                "severity": "error",
+            })
+
+    for cycles, source in cycle_claims:
+        if cycles > cycles_per_transaction_budget:
+            violations.append({
+                "violation": (
+                    f"Throughput KPI contradiction: {clock_mhz:g} MHz and {fps:g} fps allow "
+                    f"at most {cycles_per_frame_budget} cycles/frame, or "
+                    f"{cycles_per_transaction_budget:.1f} cycles per {block_w}x{block_h} transaction "
+                    f"for {total_transactions} transactions/frame. The artifact claims {source}. "
+                    "Repair the block diagram with explicit pipeline throughput arithmetic."
+                ),
+                "category": "auto_fixable",
+                "check": "performance_cycle_budget",
+                "severity": "error",
+            })
+
+    return violations
+
+
 def _shuttle_constraints_enabled(requirements: str = "", ers_spec: dict | None = None) -> bool:
     """Return whether package/shuttle constraints should be enforced.
 
@@ -590,6 +871,15 @@ async def check_constraints(
             else []
         )
         derived_violations = _check_derived_constraints(
+            block_diagram=block_diagram,
+            memory_map=memory_map,
+            clock_tree=clock_tree,
+            register_spec=register_spec,
+            requirements=requirements,
+            ers_spec=ers_spec,
+            project_root=project_root,
+        )
+        performance_violations = _check_performance_constraints(
             block_diagram=block_diagram,
             memory_map=memory_map,
             clock_tree=clock_tree,
@@ -778,7 +1068,7 @@ async def check_constraints(
 
             # Merge: deterministic violations first, then LLM violations.
             # Deduplicate: skip LLM violations for checks already covered
-            deterministic_violations = shuttle_violations + derived_violations
+            deterministic_violations = shuttle_violations + derived_violations + performance_violations
             covered_checks = {v["check"] for v in deterministic_violations}
             deduped_llm = [
                 v for v in llm_violations
@@ -789,6 +1079,7 @@ async def check_constraints(
             span.set_attribute("violation_count", len(violations))
             span.set_attribute("shuttle_violation_count", len(shuttle_violations))
             span.set_attribute("derived_violation_count", len(derived_violations))
+            span.set_attribute("performance_violation_count", len(performance_violations))
             span.set_attribute("llm_violation_count", len(deduped_llm))
             span.set_attribute("all_pass", len(violations) == 0)
             span.set_attribute("max_gate_count", max_gate_count)
@@ -807,7 +1098,7 @@ async def check_constraints(
             span.set_attribute("error", str(e))
             span.set_status(_trace.StatusCode.ERROR, str(e))
             # Still return deterministic violations even if LLM fails
-            deterministic_violations = shuttle_violations + derived_violations
+            deterministic_violations = shuttle_violations + derived_violations + performance_violations
             deterministic_violations.append({
                 "violation": f"Constraint check LLM failed: {e}. "
                              f"Architecture may have unchecked violations.",

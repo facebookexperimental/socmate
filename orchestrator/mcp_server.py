@@ -63,11 +63,12 @@ _PROJECT_ROOT = os.environ.get(
     str(Path(__file__).resolve().parent.parent),
 )
 os.environ["SOCMATE_PROJECT_ROOT"] = _PROJECT_ROOT
+_TELEMETRY_ROOT = os.environ.get("SOCMATE_TELEMETRY_ROOT", _PROJECT_ROOT)
 
 from orchestrator.architecture.state import ARCH_DOC_DIR  # noqa: E402
 from orchestrator.telemetry import init_telemetry  # noqa: E402
 
-init_telemetry(_PROJECT_ROOT)
+init_telemetry(_TELEMETRY_ROOT)
 
 # Register the observability LLM hook (fires after every graph_node_exit)
 from orchestrator.langgraph.event_stream import register_exit_hook  # noqa: E402
@@ -1088,6 +1089,7 @@ async def get_architecture_state() -> str:
         "prd_question_count": len(prd_questions),
         "block_count": len(blocks),
         "block_names": block_names,
+        "constraint_result": cr,
         "violation_count": len(violations),
         "violations": [
             v["violation"] if isinstance(v, dict) else v

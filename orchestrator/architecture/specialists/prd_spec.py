@@ -48,6 +48,7 @@ async def gather_prd(
     target_clock_mhz: float,
     user_answers: dict[str, str] | None = None,
     previous_questions: list[dict] | None = None,
+    project_root: str = ".",
 ) -> dict[str, Any]:
     """Generate PRD questions or draft the PRD document.
 
@@ -60,6 +61,7 @@ async def gather_prd(
             If provided, drafts the PRD (Phase 2).
         previous_questions: The questions that were asked (for Phase 2
             context so the LLM knows what was asked).
+        project_root: Directory where PRD collateral should be written.
 
     Returns:
         Phase 1: {"questions": [...], "phase": "questions"}
@@ -97,6 +99,9 @@ async def gather_prd(
             answers_context=answers_context,
         )
 
+        target_path = Path(project_root) / ".socmate" / "prd_spec.json"
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
         # Build user message
         if user_answers:
             user_message = (
@@ -104,7 +109,7 @@ async def gather_prd(
                 f"Write the full Product Requirements Document.\n\n"
                 f"Original requirements:\n{requirements}\n\n"
                 f"Target clock: {target_clock_mhz} MHz\n\n"
-                f"IMPORTANT: Write the complete PRD JSON to: .socmate/prd_spec.json\n"
+                f"IMPORTANT: Write the complete PRD JSON to: {target_path}\n"
                 f"After writing, respond with only the file path confirmation."
             )
         else:
@@ -120,8 +125,6 @@ async def gather_prd(
         from orchestrator.langchain.agents.socmate_llm import DEFAULT_MODEL, ClaudeLLM
 
         llm = ClaudeLLM(model=DEFAULT_MODEL, timeout=1200)
-
-        target_path = Path.cwd() / ".socmate" / "prd_spec.json"
 
         try:
             content = await llm.call(

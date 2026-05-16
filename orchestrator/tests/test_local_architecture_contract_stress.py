@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -45,11 +46,16 @@ ARCH_STRESS_CASES = [
         "codec_640x360",
         """
 Design a Sky130 soft IP grayscale intra-frame video encoder. Input frames are
-640x360 pixels, 8 bits per pixel, row-major. The transform unit consumes 8x8
-macroblocks. The architecture must preserve a measurable contract for 80
-macroblock columns, 45 macroblock rows, mb_x/mb_y ranges, total macroblocks per
-frame, byte-stream output, and PSNR/bpp validation against a Python golden
-model. Use AXI-Stream internally and no memory-mapped registers.
+640x360 pixels, 8 bits per pixel, row-major. The transform unit consumes 4x4
+blocks exactly as implemented by examples/multiframe_codec/codec_golden.py.
+The architecture must preserve a measurable contract for 160 block columns,
+90 block rows, block_x/block_y ranges, total blocks per frame, byte-stream
+output, and PSNR/bpp validation against that Python golden model. Row-major
+pixel input may use enough line/reorder buffering to form 4x4 blocks without
+dropping sustained input. Use AXI-Stream internally and no memory-mapped
+registers. Freeze codec configuration as synthesis-time constants for this
+run: qp=36, use_matrix=false, use_intra_pred=false, frame_type=intra, and
+do_deblock=false.
 """,
         id="codec_640x360",
     ),
@@ -135,6 +141,33 @@ def _case_selected(case_id: str) -> bool:
     return case_id in {item.strip() for item in selected.split(",") if item.strip()}
 
 
+def _export_case_artifacts(case_id: str, project_root: Path, state: dict) -> None:
+    artifact_root = os.environ.get("SOCMATE_STRESS_ARTIFACT_ROOT", "").strip()
+    if not artifact_root:
+        return
+
+    dest = Path(artifact_root) / case_id
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "final_architecture_state.json").write_text(json.dumps(state, indent=2, default=str))
+
+    for relpath in [
+        ".socmate/derived_constraints_audit.json",
+        ".socmate/block_specs.json",
+        ".socmate/block_diagram.json",
+        ".socmate/prd_spec.json",
+        ".socmate/ers_spec.json",
+        ".socmate/architecture_events.jsonl",
+        ".socmate/pipeline_events.jsonl",
+        "arch/sad_spec.md",
+        "arch/frd_spec.md",
+    ]:
+        src = project_root / relpath
+        if src.exists() and src.is_file():
+            dst = dest / relpath
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+
+
 @pytest.fixture
 async def live_arch(reset_mcp_state):
     import orchestrator.mcp_server as mcp
@@ -157,7 +190,8 @@ async def _run_architecture_only(mcp, requirements: str) -> dict:
     ))
     assert "error" not in result, f"start_architecture failed: {result}"
 
-    for _ in range(20):
+    seen_constraint_violations = 0
+    for _ in range(30):
         status = await wait_for_status(
             mcp._architecture,
             {"interrupted", "done", "error"},
@@ -181,15 +215,45 @@ async def _run_architecture_only(mcp, requirements: str) -> dict:
                 state.get("constraint_result", {}).get("violations", [])
                 or payload.get("violations", [])
             )
-            derived = [v for v in violations if str(v.get("check", "")).startswith("derived")]
-            assert not derived, f"derived contract violations reached escalation: {derived}"
-            await mcp.resume_architecture("feedback", json.dumps(violations))
+            seen_constraint_violations += len(violations)
+            await mcp.resume_architecture("feedback", _repair_feedback(violations))
+        elif itype == "architecture_review_needed" and phase == "max_rounds_exhausted":
+            violations = payload.get("violations", []) or []
+            raise AssertionError(
+                "architecture did not converge after constraint repair rounds: "
+                + json.dumps(violations, indent=2)
+            )
         elif itype == "architecture_final_review":
             await mcp.resume_architecture("accept")
         else:
             await mcp.resume_architecture("continue")
 
-    raise AssertionError("architecture did not complete within 20 interrupt cycles")
+    raise AssertionError(
+        f"architecture did not complete within 30 interrupt cycles; "
+        f"saw {seen_constraint_violations} constraint violations"
+    )
+
+
+def _repair_feedback(violations: list[dict]) -> str:
+    lines = [
+        "Repair every constraint violation below and regenerate the block diagram.",
+        "This stress test intentionally allows first-pass mistakes; success requires convergence.",
+        "Do not weaken the user requirements. Fix the architecture contract or ask a blocking question.",
+        "For derived geometry/count errors, recompute from the source dimensions and block/tile size.",
+        "For payload-width errors, update the payload ledger so field widths sum exactly to interface and connection widths.",
+        "For throughput/buffering errors, state concrete buffer depth, byte burst bound, cycle budget, and acceptance/output cadence.",
+        "For variable-output blocks, justify byte/packet bounds from the golden/reference model, a conservative raw/escape rule, or a validation-DV proof obligation.",
+        "If current block-diagram invariants resolve an older SAD/FRD open item, make the current handoff contract explicit and do not weaken the user requirement.",
+        "For golden-model reproducibility, name the golden path and required deterministic vectors/artifacts.",
+        "",
+        "Violations:",
+    ]
+    for idx, violation in enumerate(violations, start=1):
+        check = violation.get("check", "unknown")
+        category = violation.get("category", "unknown")
+        text = violation.get("violation", str(violation))
+        lines.append(f"{idx}. [{category}/{check}] {text}")
+    return "\n".join(lines)
 
 
 @pytest.mark.local_arch_stress
@@ -203,6 +267,12 @@ async def test_architecture_stage_preserves_derived_contracts(case_id, requireme
 
     state = await _run_architecture_only(live_arch, requirements)
     project_root = Path(state.get("project_root") or ".")
+    constraint_result = state.get("constraint_result", {}) or {}
+    assert constraint_result.get("all_pass", False), json.dumps(
+        constraint_result.get("violations", []),
+        indent=2,
+    )
+
     audit_path = project_root / ".socmate" / "derived_constraints_audit.json"
     assert audit_path.exists(), "derived constraint audit was not written"
 
@@ -211,3 +281,5 @@ async def test_architecture_stage_preserves_derived_contracts(case_id, requireme
 
     block_specs = project_root / ".socmate" / "block_specs.json"
     assert block_specs.exists(), "architecture did not finalize block_specs.json"
+
+    _export_case_artifacts(case_id, project_root, state)

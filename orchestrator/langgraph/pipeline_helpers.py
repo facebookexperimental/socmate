@@ -39,14 +39,22 @@ import yaml
 # Constants
 # ---------------------------------------------------------------------------
 
-PROJECT_ROOT = Path(
+SOURCE_ROOT = Path(
     os.environ.get(
-        "SOCMATE_PROJECT_ROOT",
+        "SOCMATE_SOURCE_ROOT",
         str(Path(__file__).resolve().parent.parent.parent),
     )
 )
-CONFIG_PATH = PROJECT_ROOT / "orchestrator" / "config.yaml"
-PDK_ROOT = PROJECT_ROOT / ".pdk"
+PROJECT_ROOT = Path(
+    os.environ.get(
+        "SOCMATE_PROJECT_ROOT",
+        str(SOURCE_ROOT),
+    )
+)
+CONFIG_PATH = Path(
+    os.environ.get("SOCMATE_CONFIG_PATH", str(SOURCE_ROOT / "orchestrator" / "config.yaml"))
+)
+PDK_ROOT = Path(os.environ.get("SOCMATE_PDK_ROOT", str(SOURCE_ROOT / ".pdk")))
 def _find_liberty_file() -> Path:
     """Locate the Sky130 liberty file, checking both sky130A and sky130B."""
     lib_name = "sky130_fd_sc_hd__tt_025C_1v80.lib"
