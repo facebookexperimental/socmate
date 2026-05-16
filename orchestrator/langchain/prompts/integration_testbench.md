@@ -120,6 +120,9 @@ COCOTB RULES (same as per-block):
 - Use cocotb with Python 3.11+ syntax.
 - Use `cocotb.clock.Clock` for clock generation (match PRD target clock).
 - Use active-low reset (`rst_n`): assert low for 5 cycles, then release.
+- Each DUT clock signal must have exactly one live cocotb Clock driver. Reuse a
+  module-level clock task across tests or explicitly stop the previous task;
+  never start a new free-running clock in every test without cleanup.
 - ALWAYS drive `m_tready = 1` BEFORE sending data on any input interface.
 - Use `cocotb.start_soon()` for concurrent sender/receiver coroutines.
   NEVER use `cocotb.start_fork()` (removed in cocotb 2.0).

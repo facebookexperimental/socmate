@@ -44,6 +44,9 @@ COCOTB RULES:
 - Use `cocotb.clock.Clock` for clock generation.
 - Use active-low reset (`rst_n`) when present; otherwise adapt to the actual
   reset port in the top-level RTL.
+- Each DUT clock signal must have exactly one live cocotb Clock driver. Reuse a
+  module-level clock task across tests or explicitly stop the previous task;
+  never start a new free-running clock in every test without cleanup.
 - Always drive ready/valid handshakes legally and add cycle-count watchdogs.
 - AXI-Stream send helpers MUST be phase-safe: drive `tvalid/tdata/tlast` before
   the rising edge that can accept the beat, sample `tready` for that same edge,

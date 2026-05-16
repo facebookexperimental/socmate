@@ -91,6 +91,15 @@ ALWAYS cast to plain Python int before assigning to DUT signals:
 When reading ordinary-width signal values, use `int(dut.signal.value)` to get a
 plain Python int.
 
+CLOCK OWNERSHIP -- CRITICAL:
+Each DUT clock signal must have exactly one live cocotb Clock driver. Do not
+call `cocotb.start_soon(Clock(dut.clk, ...).start())` independently inside
+every test without reusing or stopping the previous clock task. Use one module
+level helper that starts the clock once and reuses it across tests, or explicitly
+kill the previous clock task at teardown before starting another. Multiple live
+clock drivers on the same signal create ps-skewed duplicate edges and
+race-dependent AXI monitor failures.
+
 WIDE SIGNAL READS -- CRITICAL:
 Do not read very wide Verilator VPI signals as one Python integer. For payloads
 wider than about 2048 bits, `int(dut.<wide_bus>.value)` can be truncated by
