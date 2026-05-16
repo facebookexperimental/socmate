@@ -70,7 +70,10 @@ behavioral level.
                end_cycle = cycle
                break
        latency = end_cycle - start_cycle
-       assert latency <= budget, f"Latency {latency} exceeds budget {budget}"
+       if explicit_latency_budget_present:
+           assert latency <= budget, f"Latency {latency} exceeds budget {budget}"
+       else:
+           dut._log.info(f"Measured latency: {latency} cycles (no hard PRD/ERS KPI)")
 
 6. **Sustained throughput test**: Drive N consecutive input samples (N >=
    64) back-to-back with m_tready held high. Count the number of output
@@ -162,6 +165,10 @@ COCOTB RULES (same as per-block):
   truncated by Verilator's VPI string buffer and produce false mismatches.
   Compare field-sized debug aliases or chunk wires instead.
 - Use `assert` for pass/fail.
+- Never create a pass/fail assertion from an "architecture sanity budget",
+  "2x path length", "number of blocks", or other locally invented performance
+  threshold. Those are measurement-only unless PRD/ERS/system invariants state
+  a concrete KPI with arithmetic.
 
 TOP-LEVEL PORT NAMING:
 The auto-generated top-level module exposes unconnected block ports at the
