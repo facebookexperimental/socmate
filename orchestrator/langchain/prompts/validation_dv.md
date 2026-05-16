@@ -45,6 +45,12 @@ COCOTB RULES:
 - Use active-low reset (`rst_n`) when present; otherwise adapt to the actual
   reset port in the top-level RTL.
 - Always drive ready/valid handshakes legally and add cycle-count watchdogs.
+- AXI-Stream send helpers MUST be phase-safe: drive `tvalid/tdata/tlast` before
+  the rising edge that can accept the beat, sample `tready` for that same edge,
+  and deassert `tvalid` immediately after the edge when ready was high. Never
+  set `tvalid` after a falling edge and wait until another falling edge before
+  checking `tready`, because the DUT may accept the beat on the intervening
+  rising edge and the testbench will miss or duplicate the transaction.
 - Use `cocotb.start_soon()` for concurrent coroutines. Do not use
   `cocotb.start_fork()`.
 - Use `assert` for every pass/fail KPI check.

@@ -43,6 +43,35 @@ When the DUT has AXI-Stream input (s_tvalid/s_tready) and output
   - For backpressure tests, use ``cocotb.start_soon()`` to run sender
     and receiver concurrently, toggling m_tready on/off in the receiver.
 
+  - Every AXI-Stream send helper MUST be phase-safe. Drive
+    ``tvalid/tdata/tlast`` before the rising edge that may accept the beat,
+    sample ``tready`` for that same rising edge, then deassert ``tvalid``
+    immediately after that rising edge if ``tready`` was high. Do NOT drive
+    ``tvalid`` after a falling edge and then wait until the next falling edge
+    to check ``tready``; the DUT can legally accept the beat on the intervening
+    rising edge, causing the testbench to miss the handshake, duplicate the
+    beat, or deadlock.
+
+    Correct single-beat send pattern:
+        async def send_axis(dut, data, last=0, max_wait=1000):
+            await FallingEdge(dut.clk)
+            dut.s_axis_tdata.value = int(data)
+            dut.s_axis_tlast.value = int(last)
+            dut.s_axis_tvalid.value = 1
+            for _ in range(max_wait):
+                ready = int(dut.s_axis_tready.value)
+                await RisingEdge(dut.clk)
+                if ready:
+                    dut.s_axis_tvalid.value = 0
+                    dut.s_axis_tdata.value = 0
+                    dut.s_axis_tlast.value = 0
+                    await FallingEdge(dut.clk)
+                    return
+                await FallingEdge(dut.clk)
+            raise TimeoutError("s_axis_tready never asserted")
+
+    A sender must count exactly one accepted transfer per intended beat.
+
   - Add a cycle-count watchdog to any ``while`` loop that waits for a
     handshake signal.  Example:
         max_wait = 1000

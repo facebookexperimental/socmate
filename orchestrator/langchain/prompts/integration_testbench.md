@@ -125,6 +125,12 @@ COCOTB RULES (same as per-block):
   NEVER use `cocotb.start_fork()` (removed in cocotb 2.0).
 - Add cycle-count watchdog to every handshake wait loop (max 10000 cycles).
 - Cast all values to `int()` before assigning to DUT signals.
+- AXI-Stream send helpers MUST be phase-safe: drive `tvalid/tdata/tlast` before
+  the rising edge that can accept the beat, sample `tready` for that same edge,
+  and deassert `tvalid` immediately after the edge when ready was high. Never
+  set `tvalid` after a falling edge and wait until another falling edge before
+  checking `tready`, because the DUT may accept the beat on the intervening
+  rising edge and the testbench will miss or duplicate the transaction.
 - Use `assert` for pass/fail.
 
 TOP-LEVEL PORT NAMING:
