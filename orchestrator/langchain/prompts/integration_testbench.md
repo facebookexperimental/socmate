@@ -50,9 +50,14 @@ behavioral level.
        latency_cycles = latency_budget_us * target_clock_mhz
        # e.g. 0.32 us * 50 MHz = 16 cycles
 
-   Assert that measured latency <= latency_cycles. If the PRD does not
-   specify a latency budget, use a reasonable upper bound:
-   2x the pipeline depth (number of blocks in the longest path).
+   Assert that measured latency <= latency_cycles only when the PRD/ERS
+   specifies an explicit latency budget or when the architecture provides a
+   concrete transaction-size-derived budget. If the PRD does not specify a
+   latency budget, use a generous liveness watchdog, log the measured latency,
+   and do not invent a hard pass/fail threshold. For batch/stripe/frame
+   designs, any sanity bound must include the required input accumulation
+   before output can legally exist, such as stripe_pixels + pipeline margin,
+   not just 2x the number of blocks.
 
    Implementation pattern:
        start_cycle = None
@@ -135,11 +140,23 @@ COCOTB RULES (same as per-block):
 - Add cycle-count watchdog to every handshake wait loop (max 10000 cycles).
 - Cast all values to `int()` before assigning to DUT signals.
 - AXI-Stream send helpers MUST be phase-safe: drive `tvalid/tdata/tlast` before
-  the rising edge that can accept the beat, sample `tready` for that same edge,
-  and deassert `tvalid` immediately after the edge when ready was high. Never
-  set `tvalid` after a falling edge and wait until another falling edge before
-  checking `tready`, because the DUT may accept the beat on the intervening
-  rising edge and the testbench will miss or duplicate the transaction.
+  the rising edge that can accept the beat, then count a transfer only after a
+  rising edge where the source valid and destination ready were both sampled
+  high. Never increment the software accepted counter on the same edge where
+  the test first asserted `tvalid` from idle; the RTL did not see that valid
+  before the edge. A robust pattern is:
+
+      await FallingEdge(dut.clk)
+      dut.s_axis_tvalid.value = 1
+      dut.s_axis_tdata.value = data
+      await RisingEdge(dut.clk)
+      if int(dut.s_axis_tvalid.value) and int(dut.s_axis_tready.value):
+          accepted += 1
+          dut.s_axis_tvalid.value = 0
+
+  Keep `tvalid` asserted across cycles until a sampled handshake occurs. Do
+  not pre-sample `tready` before an edge and later assume that edge accepted
+  data unless `tvalid` was already stable before the edge.
 - Do not read very wide Verilator VPI signals as one Python integer. For
   payloads wider than about 2048 bits, `int(dut.<wide_bus>.value)` can be
   truncated by Verilator's VPI string buffer and produce false mismatches.
