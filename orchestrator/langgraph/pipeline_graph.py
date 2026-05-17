@@ -2517,6 +2517,47 @@ route_after_integration.__edge_labels__ = {
 }
 
 
+def _format_dv_retry_context(previous_result: dict | None) -> str:
+    """Format prior top-level DV failure/audit context for retry prompts."""
+    if not previous_result:
+        return ""
+    audit = previous_result.get("contract_audit") or {}
+    if not isinstance(audit, dict) or not audit:
+        bits = []
+        if previous_result.get("error"):
+            bits.append(f"Previous error: {previous_result.get('error')}")
+        if previous_result.get("sim_log_path"):
+            bits.append(f"Previous sim log: {previous_result.get('sim_log_path')}")
+        return "\n".join(bits)
+
+    first = audit.get("first_divergence") or {}
+    if not isinstance(first, dict):
+        first = {"summary": str(first)}
+    evidence = audit.get("evidence") or []
+    if isinstance(evidence, list):
+        evidence_text = "\n".join(f"- {item}" for item in evidence[:8])
+    else:
+        evidence_text = str(evidence)
+
+    parts = [
+        f"Stage: {audit.get('stage', previous_result.get('phase', 'unknown'))}",
+        f"Category: {audit.get('category', 'UNKNOWN')}",
+        f"Recommended action: {audit.get('recommended_action', '')}",
+        f"Contract failure: {audit.get('contract_failure', False)}",
+        f"First divergence: {first.get('summary', '')}",
+        f"RTL observation: {first.get('rtl_observation', '')}",
+        f"Golden/expected observation: {first.get('golden_observation', '')}",
+        f"Suggested fix: {audit.get('suggested_fix', '')}",
+        f"Outer-agent summary: {audit.get('outer_agent_summary', '')}",
+        f"Audit path: {previous_result.get('contract_audit_path', audit.get('audit_path', ''))}",
+        f"Failure context path: {audit.get('context_path', '')}",
+        f"Sim log path: {previous_result.get('sim_log_path', '')}",
+    ]
+    if evidence_text:
+        parts.append("Evidence:\n" + evidence_text)
+    return smart_truncate("\n".join(p for p in parts if p), 12000, "head_tail")
+
+
 # ---------------------------------------------------------------------------
 # Node: integration_dv  (Lead DV -- generates + runs integration testbench)
 # ---------------------------------------------------------------------------
@@ -2605,18 +2646,47 @@ async def integration_dv_node(state: OrchestratorState) -> dict:
             if mod.name:
                 modules[block_name] = mod
 
-        # 1. Generate integration testbench
-        log("  [INTEG-DV] Generating integration testbench...", YELLOW)
-        try:
-            tb_result = await generate_integration_testbench(
-                design_name=design_name,
-                top_rtl_path=top_rtl_path,
-                modules=modules,
-                connections=connections,
-                block_rtl_paths=block_rtl_paths,
-                prd_summary=prd_summary,
+        previous_dv = state.get("integration_dv_result") or {}
+        previous_action = previous_dv.get("action_taken", "")
+        previous_tb_path = previous_dv.get("testbench_path", "")
+        reuse_existing_tb = (
+            previous_action in ("fix_rtl", "fix_tb")
+            and previous_tb_path
+            and Path(previous_tb_path).exists()
+        )
+
+        generation_error: Exception | None = None
+        if reuse_existing_tb:
+            log(
+                "  [INTEG-DV] Reusing existing testbench after "
+                f"{previous_action}: {previous_tb_path}",
+                YELLOW,
             )
-        except Exception as e:
+            tb_result = {
+                "testbench_path": previous_tb_path,
+                "tb_path": previous_tb_path,
+                "test_count": previous_dv.get("test_count", 0),
+            }
+        else:
+            # 1. Generate integration testbench
+            log("  [INTEG-DV] Generating integration testbench...", YELLOW)
+            try:
+                tb_result = await generate_integration_testbench(
+                    design_name=design_name,
+                    top_rtl_path=top_rtl_path,
+                    modules=modules,
+                    connections=connections,
+                    block_rtl_paths=block_rtl_paths,
+                    prd_summary=prd_summary,
+                    prior_failure=_format_dv_retry_context(previous_dv),
+                )
+            except Exception as e:
+                tb_result = None
+                generation_error = e
+        if not reuse_existing_tb and tb_result is None:
+            if generation_error is None:
+                generation_error = RuntimeError("Integration testbench generation returned no result")
+            e = generation_error
             log(f"  [INTEG-DV] Testbench generation failed: {e}", RED)
             error_msg = f"Integration testbench generation failed: {e}"
             contract_audit = await _run_top_level_contract_audit(
@@ -3047,17 +3117,46 @@ async def validation_dv_node(state: OrchestratorState) -> dict:
             if mod.name:
                 modules[block_name] = mod
 
-        log("  [VALIDATION-DV] Generating ERS/KPI validation testbench...", YELLOW)
-        try:
-            tb_result = await generate_validation_testbench(
-                design_name=design_name,
-                top_rtl_path=top_rtl_path,
-                modules=modules,
-                connections=connections,
-                block_rtl_paths=block_rtl_paths,
-                ers_context=smart_truncate(ers_context, 30000),
+        previous_dv = state.get("validation_dv_result") or {}
+        previous_action = previous_dv.get("action_taken", "")
+        previous_tb_path = previous_dv.get("testbench_path", "")
+        reuse_existing_tb = (
+            previous_action in ("fix_rtl", "fix_tb")
+            and previous_tb_path
+            and Path(previous_tb_path).exists()
+        )
+
+        generation_error: Exception | None = None
+        if reuse_existing_tb:
+            log(
+                "  [VALIDATION-DV] Reusing existing testbench after "
+                f"{previous_action}: {previous_tb_path}",
+                YELLOW,
             )
-        except Exception as e:
+            tb_result = {
+                "testbench_path": previous_tb_path,
+                "tb_path": previous_tb_path,
+                "test_count": previous_dv.get("test_count", 0),
+            }
+        else:
+            log("  [VALIDATION-DV] Generating ERS/KPI validation testbench...", YELLOW)
+            try:
+                tb_result = await generate_validation_testbench(
+                    design_name=design_name,
+                    top_rtl_path=top_rtl_path,
+                    modules=modules,
+                    connections=connections,
+                    block_rtl_paths=block_rtl_paths,
+                    ers_context=smart_truncate(ers_context, 30000),
+                    prior_failure=_format_dv_retry_context(previous_dv),
+                )
+            except Exception as e:
+                tb_result = None
+                generation_error = e
+        if not reuse_existing_tb and tb_result is None:
+            if generation_error is None:
+                generation_error = RuntimeError("Validation testbench generation returned no result")
+            e = generation_error
             log(f"  [VALIDATION-DV] Testbench generation failed: {e}", RED)
             error_msg = f"Validation testbench generation failed: {e}"
             contract_audit = await _run_top_level_contract_audit(

@@ -46,6 +46,7 @@ class ValidationDVGenerator:
         ers_context: str,
         block_rtl_paths: dict[str, str] | None = None,
         output_path: str = "",
+        prior_failure: str = "",
     ) -> dict[str, Any]:
         """Generate a cocotb validation DV testbench."""
         with _tracer.start_as_current_span(f"Validation DV [{design_name}]") as span:
@@ -102,6 +103,15 @@ class ValidationDVGenerator:
                 "evidence for reset, handshakes, control/mode selection, "
                 "payload movement, KPI counters, and final outputs."
             )
+
+            if prior_failure:
+                parts.append(
+                    "\n--- PRIOR ATTEMPT FAILURE / CONTRACT AUDIT ---\n"
+                    "This is a retry. The previous attempt failed. You MUST "
+                    "address the first divergence and suggested fix below; do "
+                    "not regenerate the same bug.\n"
+                    f"{prior_failure}"
+                )
 
             content = await self.llm.call(
                 system=SYSTEM_PROMPT,
