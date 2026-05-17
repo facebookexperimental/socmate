@@ -93,6 +93,17 @@ class IntegrationLeadAgent:
             result = self._parse_response(content, design_name)
 
             verilog = result.pop("verilog", "")
+            if output_path and "module" not in verilog:
+                existing = Path(output_path)
+                if existing.exists():
+                    existing_text = existing.read_text(encoding="utf-8")
+                    if f"module {result.get('module_name', design_name)}" in existing_text:
+                        verilog = existing_text
+                        result["notes"] = (
+                            f"{result.get('notes', '')} "
+                            "Used Verilog already written to output_path because "
+                            "the JSON verilog field did not contain a module."
+                        ).strip()
             if verilog and output_path:
                 out = Path(output_path)
                 out.parent.mkdir(parents=True, exist_ok=True)
@@ -100,6 +111,12 @@ class IntegrationLeadAgent:
                 result["rtl_path"] = output_path
             else:
                 result["rtl_path"] = ""
+                if "module" not in verilog:
+                    result["parse_error"] = True
+                    result["notes"] = (
+                        f"{result.get('notes', '')} "
+                        "Integration Lead did not provide valid top-level Verilog."
+                    ).strip()
 
             span.set_attribute("mismatch_count", len(result.get("mismatches", [])))
             span.set_attribute("wire_count", result.get("wire_count", 0))
