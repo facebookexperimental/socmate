@@ -40,12 +40,18 @@ jobs:
         # On PR triggers we try several models in parallel so we can see at
         # a glance which ones the org has access to. workflow_dispatch
         # overrides this matrix and uses only the user-supplied model.
+        # Valid IDs as of catalog snapshot 2026-05-17. Get the live list
+        # with: curl -H "Authorization: Bearer $GH_TOKEN" \
+        #   https://models.github.ai/catalog/models
+        # (Note: Gemma is not in the catalog -- closest open coders are
+        # codestral and deepseek-v3.)
         model:
-          - openai/gpt-4o-mini
-          - meta/Meta-Llama-3.1-70B-Instruct
-          - deepseek/DeepSeek-V3
-          - google/gemma-2-27b-it
-          - mistral-ai/Mistral-Large-2411
+          - mistral-ai/codestral-2501
+          - deepseek/deepseek-v3-0324
+          - meta/llama-3.3-70b-instruct
+          - microsoft/phi-4
+          - openai/gpt-4.1-mini
+          - xai/grok-3-mini
     steps:
       - name: Pick model + prompt
         id: pick
