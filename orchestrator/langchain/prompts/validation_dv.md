@@ -83,6 +83,13 @@ COCOTB RULES:
 - Keep validation runtime bounded. Prefer short directed frames/prefixes for
   semantic and AXI tests, and reserve full-frame simulation only for KPI tests
   whose ERS requirement explicitly needs a full frame.
+- Default RTL validation must finish in minutes, not tens of minutes. Unless
+  the ERS explicitly says "run an exhaustive full-frame RTL simulation" as a
+  hard acceptance criterion, cap repeated-structure RTL tests to a directed
+  prefix such as 1-2 rows/stripes/tiles plus boundary transitions. For codecs,
+  do not iterate all macroblocks of a 640x360 frame in validation DV; mark
+  exhaustive frame PSNR/bitrate/terminal-frame equivalence as deferred to the
+  RD/golden sweep and validate a bounded prefix in RTL.
 - Derive watchdogs and expected completion windows from the documented ERS,
   uArch, and RTL latency/throughput contracts. Do not use a fixed "short"
   watchdog for requirements that must traverse an iterative or feedback-coupled
