@@ -1,0 +1,79 @@
+# Smoketest for GitHub Models (https://docs.github.com/en/github-models).
+# Calls a model via actions/ai-inference@v1 to confirm what's available and
+# how the output looks for a small Verilog prompt.
+#
+# Triggers:
+#   - workflow_dispatch: pick model + prompt from the Actions UI
+#   - pull_request:      runs automatically when this workflow file changes
+#                        (paths filter keeps it off unrelated PRs)
+#
+# Auth: uses the built-in GITHUB_TOKEN with `models: read` permission --
+# no Anthropic / OpenAI / Google key required.
+
+name: LLM smoketest (GitHub Models)
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Model name (publisher/model). Examples: openai/gpt-4o-mini, meta/Meta-Llama-3.1-70B-Instruct, deepseek/DeepSeek-V3, google/gemma-...'
+        required: true
+        default: 'openai/gpt-4o-mini'
+      prompt:
+        description: 'User prompt to send'
+        required: true
+        default: 'Write a 4-bit synchronous up-counter in Verilog with a synchronous active-high reset and an enable input. Reply with code only.'
+  pull_request:
+    paths:
+      - '.github/workflows/llm-smoketest.yml'
+
+permissions:
+  models: read
+  contents: read
+
+jobs:
+  smoketest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # On PR triggers we try several models in parallel so we can see at
+        # a glance which ones the org has access to. workflow_dispatch
+        # overrides this matrix and uses only the user-supplied model.
+        model:
+          - openai/gpt-4o-mini
+          - meta/Meta-Llama-3.1-70B-Instruct
+          - deepseek/DeepSeek-V3
+          - google/gemma-2-27b-it
+          - mistral-ai/Mistral-Large-2411
+    steps:
+      - name: Pick model + prompt
+        id: pick
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "model=${{ inputs.model }}" >> "$GITHUB_OUTPUT"
+            echo "prompt<<EOF" >> "$GITHUB_OUTPUT"
+            echo "${{ inputs.prompt }}" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          else
+            echo "model=${{ matrix.model }}" >> "$GITHUB_OUTPUT"
+            echo "prompt=Write a 4-bit synchronous up-counter in Verilog with a synchronous active-high reset and an enable input. Reply with code only." >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Call model
+        id: call
+        uses: actions/ai-inference@v1
+        continue-on-error: true
+        with:
+          model: ${{ steps.pick.outputs.model }}
+          system-prompt: 'You are a concise Verilog RTL assistant. Reply with synthesisable Verilog-2001 only, no commentary.'
+          prompt: ${{ steps.pick.outputs.prompt }}
+          max-tokens: 400
+
+      - name: Show result
+        run: |
+          echo "model: ${{ steps.pick.outputs.model }}"
+          echo "call step outcome: ${{ steps.call.outcome }}"
+          echo "----- response -----"
+          echo "${{ steps.call.outputs.response }}"
+          echo "----- end response -----"
