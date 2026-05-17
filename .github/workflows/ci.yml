@@ -25,6 +25,15 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Install Node + Claude CLI
+        # Tests instantiate ClaudeLLM() at import time, which calls
+        # _find_claude_binary() and raises FileNotFoundError when the
+        # `claude` binary is missing from PATH.
+        run: |
+          curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
+          sudo apt-get install -y nodejs
+          sudo npm install -g @anthropic-ai/claude-code
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
